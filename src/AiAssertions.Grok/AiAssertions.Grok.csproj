@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>AiAssertions.Grok</PackageId>
+    <Title>AiAssertions Grok Provider</Title>
+    <Description>This package provides the Grok model for AiAssertions.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AiAssertions.Core\AiAssertions.Core.csproj" />
+  </ItemGroup>
+
+</Project>

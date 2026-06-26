@@ -1,0 +1,19 @@
+<Solution>
+  <Folder Name="/.solution items/">
+    <File Path="Directory.Build.props" />
+    <File Path="README.md" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/AiAssertions.Sample/AiAssertions.Sample.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/AiAssertions/AiAssertions.csproj" />
+    <Project Path="src/AiAssertions.Anthropic/AiAssertions.Anthropic.csproj" />
+    <Project Path="src/AiAssertions.Core/AiAssertions.Core.csproj" />
+    <Project Path="src/AiAssertions.DeepSeek/AiAssertions.DeepSeek.csproj" />
+    <Project Path="src/AiAssertions.Gemini/AiAssertions.Gemini.csproj" />
+    <Project Path="src/AiAssertions.Grok/AiAssertions.Grok.csproj" />
+    <Project Path="src/AiAssertions.OpenAi/AiAssertions.OpenAi.csproj" />
+    <Project Path="src/AiAssertions.OpenRouter/AiAssertions.OpenRouter.csproj" />
+  </Folder>
+</Solution>

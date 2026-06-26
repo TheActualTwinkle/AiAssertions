@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>AiAssertions</PackageId>
+    <Title>AiAssertions</Title>
+    <Description>AI-powered codebase assertions. Write natural-language requirements in tests and let an AI agent inspect your project.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AiAssertions.Core\AiAssertions.Core.csproj" />
+  </ItemGroup>
+</Project>

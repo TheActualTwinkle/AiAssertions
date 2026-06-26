@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>AiAssertions.OpenRouter</PackageId>
+    <Title>AiAssertions OpenRouter Provider</Title>
+    <Description>This package provides the OpenRouter model for AiAssertions.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AiAssertions.Core\AiAssertions.Core.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>AiAssertions.Core</PackageId>
+    <Title>AiAssertions Core</Title>
+    <Description>This package contains the core functionality of AiAssertions, a library for AI-assisted assertions.</Description>
+  </PropertyGroup>
+</Project>

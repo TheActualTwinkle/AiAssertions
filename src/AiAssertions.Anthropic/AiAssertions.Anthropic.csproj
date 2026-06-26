@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <PackageId>AiAssertions.Anthropic</PackageId>
+    <Title>AiAssertions Anthropic Provider</Title>
+    <Description>This package provides Claude models for AiAssertions.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AiAssertions.Core\AiAssertions.Core.csproj" />
+  </ItemGroup>
+
+</Project>
