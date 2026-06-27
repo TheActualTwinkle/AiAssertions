@@ -25,6 +25,12 @@ public async Task Students_CannotModifyMarks()
 }
 ```
 
+## Installation
+
+```
+dotnet add package AiAssertions
+```
+
 ## Public API
 
 ```csharp
