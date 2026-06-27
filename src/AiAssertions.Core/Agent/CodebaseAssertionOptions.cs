@@ -6,6 +6,10 @@ internal sealed class CodebaseAssertionOptions
 
     public int MaxToolIterations { get; init; } = 300;
 
+    public int RecentToolCallTurns { get; init; } = 2;
+
+    public int MaxCompactedToolResultChars { get; init; } = 1200;
+
     public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(2);
 
     public double MinimumTrueConfidence { get; init; }

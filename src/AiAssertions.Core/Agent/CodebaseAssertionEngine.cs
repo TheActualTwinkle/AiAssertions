@@ -16,6 +16,7 @@ internal sealed class CodebaseAssertionEngine
                                         You cannot access the filesystem directly. Use only the provided tools.
                                         The user message includes execution_context.codebase_root. Use that root for tool calls.
                                         Do not guess when evidence can be gathered.
+                                        If the conversation contains a compacted assertion state, treat it as previously gathered tool evidence.
                                         
                                         Batch independent tool calls aggressively.
                                         If you know several files, names, or searches that are all needed, request all of those tool calls in the same assistant turn.
@@ -113,11 +114,16 @@ internal sealed class CodebaseAssertionEngine
 
         for (var step = 0; step < _options.MaxToolIterations; step++)
         {
+            var requestMessages = CodebaseConversationCompactor.BuildRequestMessages(
+                messages,
+                _options.RecentToolCallTurns,
+                _options.MaxCompactedToolResultChars);
+
             var response = await _client
                 .GetToolResponseAsync(
                     new AiToolRequest
                     {
-                        Messages = messages,
+                        Messages = requestMessages,
                         Tools = _toolDefinitions
                     }, cancellationToken)
                 .ConfigureAwait(false);
