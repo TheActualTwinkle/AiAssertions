@@ -4,7 +4,11 @@ internal sealed class CodebaseAssertionOptions
 {
     public string? WorkingDirectory { get; init; }
 
-    public int MaxToolIterations { get; init; } = 100;
+    public int MaxToolIterations { get; init; } = 300;
+
+    public int RecentToolCallTurns { get; init; } = 2;
+
+    public int MaxCompactedToolResultChars { get; init; } = 1200;
 
     public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(2);
 

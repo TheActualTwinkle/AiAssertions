@@ -6,7 +6,6 @@ internal static class DefaultCodebaseTools
 {
     internal static IReadOnlyList<IAiTool> Create() =>
     [
-        new DiscoverProjectRootTool(),
         new ListProjectsTool(),
         new SearchFilesTool(),
         new FindFilesByNameTool(),

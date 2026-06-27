@@ -40,6 +40,7 @@ AiAssert
     // Timeout is a threshold for how long the model has to return a verdict.
     // If the model does not return a verdict within this time, the result verdict is NotDetermined.
     .WithDefaultTimeout(TimeSpan.FromMinutes(1)) // Optional: override default timeout for all assertions.
+    .WithDefaultMaxToolIterations(300) // Optional: override default tool-calling iteration limit.
     // Confedence tolerance is a threshold for the model's confidence in its verdict. 
     // If the model returns a confidence below this threshold, the assertion fails.
     .WithGlobalConfidenceTolerance(0.85); // Optional: override default confidence tolerance for all assertions.
@@ -47,6 +48,7 @@ AiAssert
 var result = await AiAssert
     .OnCodebase()
     .WithTimeout(TimeSpan.FromMinutes(1)) // Optional: override default timeout for this concrete assertion.
+    .WithMaxToolIterations(300) // Optional: override default tool-calling iteration limit for this assertion.
     .IncludeDirectory("SampleCode/Security") // Optional: include directory as initial evidence for the model.
     .That("Business requirement in natural language.");
 

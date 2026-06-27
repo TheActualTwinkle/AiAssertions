@@ -26,8 +26,7 @@ internal sealed class SearchTextTool : JsonTool<SearchTextToolArguments>
             if (matches.Count >= max)
                 break;
 
-            if (file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-                || file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+            if (PathSafety.IsIgnoredPath(file)
                 || (!string.IsNullOrWhiteSpace(arguments.Extension) && !Path.GetExtension(file).Equals(arguments.Extension, StringComparison.OrdinalIgnoreCase)))
                 continue;
 

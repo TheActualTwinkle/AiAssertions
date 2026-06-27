@@ -12,6 +12,7 @@ public sealed class CodebaseAssertion
     private readonly IToolCallingClient _client;
     private readonly IReadOnlyList<string> _includedPaths;
     private readonly IReadOnlyList<string> _includedTypes;
+    private readonly int _maxToolIterations;
     private readonly double _minimumFalseConfidence;
     private readonly double _minimumTrueConfidence;
     private readonly TimeSpan _timeout;
@@ -22,6 +23,7 @@ public sealed class CodebaseAssertion
             [],
             [],
             defaults.Timeout,
+            defaults.MaxToolIterations,
             defaults.MinimumTrueConfidence,
             defaults.MinimumFalseConfidence)
     {
@@ -32,6 +34,7 @@ public sealed class CodebaseAssertion
         IReadOnlyList<string> includedPaths,
         IReadOnlyList<string> includedTypes,
         TimeSpan timeout,
+        int maxToolIterations,
         double minimumTrueConfidence,
         double minimumFalseConfidence)
     {
@@ -39,6 +42,7 @@ public sealed class CodebaseAssertion
         _includedPaths = includedPaths;
         _includedTypes = includedTypes;
         _timeout = timeout;
+        _maxToolIterations = maxToolIterations;
         _minimumTrueConfidence = minimumTrueConfidence;
         _minimumFalseConfidence = minimumFalseConfidence;
     }
@@ -54,6 +58,19 @@ public sealed class CodebaseAssertion
             throw new ArgumentOutOfRangeException(nameof(timeout), "Timeout must be positive.");
 
         return Clone(timeout: timeout);
+    }
+
+    /// <summary>
+    /// Sets the maximum number of tool-calling iterations allowed for the assertion agent.
+    /// </summary>
+    /// <param name="maxToolIterations">The maximum number of tool-calling iterations.</param>
+    /// <returns>A new assertion builder with the iteration limit configured.</returns>
+    public CodebaseAssertion WithMaxToolIterations(int maxToolIterations)
+    {
+        if (maxToolIterations <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxToolIterations), "Max tool iterations must be positive.");
+
+        return Clone(maxToolIterations: maxToolIterations);
     }
 
     /// <summary>
@@ -168,6 +185,7 @@ public sealed class CodebaseAssertion
             IncludedPaths = _includedPaths,
             IncludedTypes = _includedTypes,
             Timeout = timeout,
+            MaxToolIterations = _maxToolIterations,
             MinimumTrueConfidence = _minimumTrueConfidence,
             MinimumFalseConfidence = _minimumFalseConfidence
         })
@@ -235,6 +253,7 @@ public sealed class CodebaseAssertion
         IReadOnlyList<string>? includedPaths = null,
         IReadOnlyList<string>? includedTypes = null,
         TimeSpan? timeout = null,
+        int? maxToolIterations = null,
         double? minimumTrueConfidence = null,
         double? minimumFalseConfidence = null) =>
         new(
@@ -242,6 +261,7 @@ public sealed class CodebaseAssertion
             includedPaths ?? _includedPaths,
             includedTypes ?? _includedTypes,
             timeout ?? _timeout,
+            maxToolIterations ?? _maxToolIterations,
             minimumTrueConfidence ?? _minimumTrueConfidence,
             minimumFalseConfidence ?? _minimumFalseConfidence);
 
