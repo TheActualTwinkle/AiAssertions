@@ -17,8 +17,7 @@ internal sealed class SearchFilesTool : JsonTool<SearchFilesToolArguments>
         var extension = arguments.Extension;
         
         var files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-                && !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(path => !PathSafety.IsIgnoredPath(path))
             .Where(path => string.IsNullOrWhiteSpace(extension) || Path.GetExtension(path).Equals(extension, StringComparison.OrdinalIgnoreCase))
             .Select(path => Path.GetRelativePath(root, path))
             .Order(StringComparer.Ordinal)

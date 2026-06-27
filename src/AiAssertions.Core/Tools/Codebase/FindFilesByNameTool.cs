@@ -19,8 +19,7 @@ internal sealed class FindFilesByNameTool : JsonTool<FindFilesByNameToolArgument
         var max = Math.Clamp(arguments.MaxResults ?? 50, 1, 200);
         
         var files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-                && !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(path => !PathSafety.IsIgnoredPath(path))
             .Where(path => Path.GetFileName(path).Contains(arguments.Name, StringComparison.OrdinalIgnoreCase))
             .Select(path => Path.GetRelativePath(root, path))
             .Order(StringComparer.Ordinal)

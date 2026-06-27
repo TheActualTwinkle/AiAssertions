@@ -17,9 +17,7 @@ internal sealed class ListProjectsTool : JsonTool<ListProjectsToolArguments>
 
         foreach (var pattern in ProjectManifestPatterns)
             foreach (var path in Directory.EnumerateFiles(root, pattern, SearchOption.AllDirectories))
-                if (!path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-                    && !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-                    && !path.Contains($"{Path.DirectorySeparatorChar}node_modules{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+                if (!PathSafety.IsIgnoredPath(path))
                     projects.Add(Path.GetRelativePath(root, path));
 
         return ValueTask.FromResult<object>(new { projects });
