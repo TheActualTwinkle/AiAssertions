@@ -14,7 +14,14 @@ internal sealed class CodebaseAssertionEngine
                                         You are AiAssert, a strict codebase assertion agent.
                                         Decide whether the requirement is satisfied by gathering evidence with tools.
                                         You cannot access the filesystem directly. Use only the provided tools.
+                                        The user message includes execution_context.codebase_root. Use that root for tool calls.
                                         Do not guess when evidence can be gathered.
+                                        
+                                        Batch independent tool calls aggressively.
+                                        If you know several files, names, or searches that are all needed, request all of those tool calls in the same assistant turn.
+                                        Prefer one broad discovery turn followed by one batched evidence-reading turn over many single-tool turns.
+                                        Do not wait for read_file("A.cs") before requesting read_file("B.cs") when both files are already known.
+                                        
                                         When you ready to return a verdict, do not call any more tools and return the JSON in a single code block.
                                         Return the final verdict as strict JSON only:
                                         {"passed":true|false,"confidence":0.0-1.0,"is_conclusive":true|false,"reason":"...","evidence":[{"file":"...","start_line":1,"end_line":3,"description":"..."}],"missing_evidence":[{"description":"...","expected_location":"..."}]}
@@ -22,7 +29,7 @@ internal sealed class CodebaseAssertionEngine
                                         Most important rule:
                                         Never return any other text outside the JSON code block. Do not include any additional commentary or explanations.
                                         "reason" must be a concise summary of the evidence and reasoning behind the verdict with max 150 characters. 
-                                        "evidence" must contain only concrete code evidence with exact file paths (relative to project root) and one-based line ranges.
+                                        "evidence" must contain only concrete code evidence with exact file paths (relative to codebase root) and one-based line ranges.
                                         "missing_evidence" must describe relevant evidence that was expected or needed but not found.
                                         If any of this rules are violated, the verdict will be considered invalid and the assertion will fail.
 
@@ -34,7 +41,8 @@ internal sealed class CodebaseAssertionEngine
 
     private readonly IToolCallingClient _client;
     private readonly CodebaseAssertionOptions _options;
-    private readonly IReadOnlyList<IAiTool> _tools;
+    private readonly IReadOnlyDictionary<string, IAiTool> _toolsByName;
+    private readonly IReadOnlyList<AiToolDefinition> _toolDefinitions;
 
     internal CodebaseAssertionEngine(
         IToolCallingClient client,
@@ -42,7 +50,16 @@ internal sealed class CodebaseAssertionEngine
         CodebaseAssertionOptions? options = null)
     {
         _client = client;
-        _tools = (tools ?? DefaultCodebaseTools.Create()).ToArray();
+        IReadOnlyList<IAiTool> tools1 = (tools ?? DefaultCodebaseTools.Create()).ToArray();
+        _toolsByName = tools1.ToDictionary(tool => tool.Name, StringComparer.Ordinal);
+        _toolDefinitions = tools1
+            .Select(tool => new AiToolDefinition
+            {
+                Name = tool.Name,
+                Description = tool.Description,
+                ParametersJsonSchema = tool.ParametersJsonSchema
+            })
+            .ToArray();
         _options = options ?? new CodebaseAssertionOptions();
     }
 
@@ -77,7 +94,8 @@ internal sealed class CodebaseAssertionEngine
     {
         var workingDirectory = _options.WorkingDirectory ?? Directory.GetCurrentDirectory();
         var context = new ToolExecutionContext(workingDirectory);
-        var userMessage = await BuildUserMessageAsync(requirement, workingDirectory, cancellationToken).ConfigureAwait(false);
+        var codebaseRoot = PathSafety.DiscoverRoot(context.WorkingDirectory);
+        var userMessage = await BuildUserMessageAsync(requirement, codebaseRoot, cancellationToken).ConfigureAwait(false);
         
         var messages = new List<AiChatMessage>
         {
@@ -93,15 +111,6 @@ internal sealed class CodebaseAssertionEngine
             }
         };
 
-        var toolDefinitions = _tools
-            .Select(tool => new AiToolDefinition
-            {
-                Name = tool.Name,
-                Description = tool.Description,
-                ParametersJsonSchema = tool.ParametersJsonSchema
-            })
-            .ToArray();
-
         for (var step = 0; step < _options.MaxToolIterations; step++)
         {
             var response = await _client
@@ -109,7 +118,7 @@ internal sealed class CodebaseAssertionEngine
                     new AiToolRequest
                     {
                         Messages = messages,
-                        Tools = toolDefinitions
+                        Tools = _toolDefinitions
                     }, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -138,22 +147,11 @@ internal sealed class CodebaseAssertionEngine
                 ToolCalls = response.ToolCalls
             });
 
-            foreach (var call in response.ToolCalls)
-            {
-                var tool = _tools.FirstOrDefault(candidate => candidate.Name.Equals(call.Name, StringComparison.Ordinal));
-                
-                var content = tool is null
-                    ? JsonSerializer.Serialize(new { error = $"Unknown tool '{call.Name}'." }, AssertionJson.Options)
-                    : await ExecuteToolAsync(tool, call.ArgumentsJson, context, cancellationToken).ConfigureAwait(false);
-                
-                messages.Add(new AiChatMessage
-                {
-                    Role = "tool",
-                    Content = content,
-                    Name = call.Name,
-                    ToolCallId = call.Id
-                });
-            }
+            var toolMessages = await Task
+                .WhenAll(response.ToolCalls.Select(call => ExecuteToolCallAsync(call, context, cancellationToken)))
+                .ConfigureAwait(false);
+
+            messages.AddRange(toolMessages);
         }
 
         var transcript = new StringBuilder();
@@ -182,33 +180,38 @@ internal sealed class CodebaseAssertionEngine
         };
     }
 
-    private async Task<string> BuildUserMessageAsync(string requirement, string workingDirectory, CancellationToken cancellationToken)
+    private async Task<string> BuildUserMessageAsync(string requirement, string codebaseRoot, CancellationToken cancellationToken)
     {
         var builder = new StringBuilder();
         
         builder.AppendLine("Requirement:");
         builder.AppendLine(requirement.Trim());
+        builder.AppendLine();
+        builder.AppendLine("Execution context:");
+        builder.AppendLine("```json");
+        builder.AppendLine(JsonSerializer.Serialize(new { codebase_root = codebaseRoot }, AssertionJson.Options));
+        builder.AppendLine("```");
 
-        var includedEvidence = await ReadIncludedEvidenceAsync(workingDirectory, cancellationToken).ConfigureAwait(false);
-        
-        if (includedEvidence.Length > 0)
-        {
-            builder.AppendLine();
-            builder.AppendLine("Pre-included code evidence:");
-            builder.Append(includedEvidence);
-        }
+        var includedEvidence = await ReadIncludedEvidenceAsync(codebaseRoot, cancellationToken).ConfigureAwait(false);
+
+        if (includedEvidence.Length <= 0)
+            return builder.ToString();
+
+        builder.AppendLine();
+        builder.AppendLine("Pre-included code evidence:");
+        builder.Append(includedEvidence);
 
         return builder.ToString();
     }
 
-    private async Task<string> ReadIncludedEvidenceAsync(string workingDirectory, CancellationToken cancellationToken)
+    private async Task<string> ReadIncludedEvidenceAsync(string codebaseRoot, CancellationToken cancellationToken)
     {
-        var files = ResolveIncludedFiles(workingDirectory).Take(20).ToArray();
+        var files = ResolveIncludedFiles(codebaseRoot).Take(20).ToArray();
         
         if (files.Length == 0)
             return string.Empty;
 
-        var root = Path.GetFullPath(workingDirectory);
+        var root = codebaseRoot;
         var builder = new StringBuilder();
         
         foreach (var file in files)
@@ -309,5 +312,23 @@ internal sealed class CodebaseAssertionEngine
         {
             return JsonSerializer.Serialize(new { error = ex.Message }, AssertionJson.Options);
         }
+    }
+
+    private async Task<AiChatMessage> ExecuteToolCallAsync(
+        AiToolCall call,
+        ToolExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        var content = _toolsByName.TryGetValue(call.Name, out var tool)
+            ? await ExecuteToolAsync(tool, call.ArgumentsJson, context, cancellationToken).ConfigureAwait(false)
+            : JsonSerializer.Serialize(new { error = $"Unknown tool '{call.Name}'." }, AssertionJson.Options);
+
+        return new AiChatMessage
+        {
+            Role = "tool",
+            Content = content,
+            Name = call.Name,
+            ToolCallId = call.Id
+        };
     }
 }

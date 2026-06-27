@@ -31,6 +31,23 @@ public sealed class AiAssertConfiguration
     }
 
     /// <summary>
+    /// Sets the default maximum number of tool-calling iterations used by AIAssert assertions.
+    /// </summary>
+    /// <param name="maxToolIterations">The default maximum number of tool-calling iterations.</param>
+    /// <returns>The same configuration builder.</returns>
+    public AiAssertConfiguration WithDefaultMaxToolIterations(int maxToolIterations)
+    {
+        if (maxToolIterations <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxToolIterations), "Max tool iterations must be positive.");
+
+        var defaults = _getDefaults();
+        
+        _setDefaults(defaults with { MaxToolIterations = maxToolIterations });
+
+        return this;
+    }
+
+    /// <summary>
     /// Sets the default minimum confidence required for both passing and failing verdicts.
     /// </summary>
     /// <param name="minimumConfidence">The minimum confidence value between 0 and 1.</param>

@@ -155,7 +155,7 @@ internal sealed class AnthropicClient : IToolCallingClient
     private static JsonNode CreateContent(AiChatMessage message)
     {
         if (message.ToolCalls is not { Count: > 0 })
-            return JsonValue.Create(message.Content)!;
+            return JsonValue.Create(message.Content);
 
         var content = new JsonArray();
 
