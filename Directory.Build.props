@@ -23,8 +23,23 @@
   </PropertyGroup>
 
   <ItemGroup Condition="'$(IsPackable)' != 'false'">
-    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" />
-    <None Include="$(MSBuildThisFileDirectory)docs\**\*" Pack="true" PackagePath="docs\" />
-    <None Include="$(MSBuildThisFileDirectory).github\images\logo.png" Pack="true" PackagePath="/" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)README.md"
+          Pack="true"
+          PackagePath="\" />
+
+    <None Include="$(MSBuildThisFileDirectory)docs\**\*"
+          Exclude="$(MSBuildThisFileDirectory)docs\ai-test-flow.excalidraw"
+          Pack="true"
+          PackagePath="docs\" />
+
+    <None Include="$(MSBuildThisFileDirectory).github\images\logo.png"
+          Pack="true"
+          PackagePath="/"
+          Visible="false" />
+
+    <None Include="$(MSBuildThisFileDirectory).github\images\ai-test-flow.png"
+          Pack="true"
+          PackagePath="/"
+          Visible="false" />
   </ItemGroup>
 </Project>
