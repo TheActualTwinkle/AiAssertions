@@ -1,14 +1,28 @@
+using AiAssertions.Core.Models;
+
 namespace AiAssertions.Core.Agent;
 
 internal sealed class CodebaseAssertionOptions
 {
+    public string? SystemPrompt { get; init; }
+
+    public string? AdditionalSystemPrompt { get; init; }
+
     public string? WorkingDirectory { get; init; }
 
     public int MaxToolIterations { get; init; } = 300;
 
+    public int? MaxRequestTokens { get; init; }
+
+    public Func<IReadOnlyList<AiChatMessage>, int>? RequestTokenEstimator { get; init; }
+
+    public bool ConversationCompactionEnabled { get; init; } = true;
+
     public int RecentToolCallTurns { get; init; } = 2;
 
-    public int MaxCompactedToolResultChars { get; init; } = 1200;
+    public int MaxCompactedToolResultChars { get; init; } = 3000;
+
+    public Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>>? ConversationCompactor { get; init; }
 
     public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(2);
 

@@ -25,6 +25,11 @@ public async Task Students_CannotModifyMarks()
 }
 ```
 
+## AI Test Flow
+<p align="center">
+	<img src=".github/images/ai-test-flow.png" alt="Logo" style="width: 100%">
+</p>
+
 ## Installation
 
 ```

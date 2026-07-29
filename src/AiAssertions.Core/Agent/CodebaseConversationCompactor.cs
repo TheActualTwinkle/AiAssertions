@@ -9,6 +9,26 @@ internal static class CodebaseConversationCompactor
 {
     internal static IReadOnlyList<AiChatMessage> BuildRequestMessages(
         IReadOnlyList<AiChatMessage> messages,
+        Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>>? customCompactor,
+        bool compactionEnabled,
+        int recentToolCallTurns,
+        int maxCompactedToolResultChars,
+        int? maxRequestTokens,
+        Func<IReadOnlyList<AiChatMessage>, int>? tokenEstimator)
+    {
+        var requestMessages = customCompactor is not null
+            ? customCompactor(messages)
+            : compactionEnabled
+                ? BuildCompactedRequestMessages(messages, recentToolCallTurns, maxCompactedToolResultChars)
+                : messages;
+
+        return maxRequestTokens is > 0
+            ? ApplyTokenLimit(requestMessages, maxRequestTokens.Value, tokenEstimator)
+            : requestMessages;
+    }
+
+    private static IReadOnlyList<AiChatMessage> BuildCompactedRequestMessages(
+        IReadOnlyList<AiChatMessage> messages,
         int recentToolCallTurns,
         int maxCompactedToolResultChars)
     {
@@ -39,6 +59,126 @@ internal static class CodebaseConversationCompactor
         return requestMessages;
     }
 
+    private static IReadOnlyList<AiChatMessage> ApplyTokenLimit(
+        IReadOnlyList<AiChatMessage> messages,
+        int maxRequestTokens,
+        Func<IReadOnlyList<AiChatMessage>, int>? tokenEstimator)
+    {
+        var estimateTokens = tokenEstimator ?? EstimateTokens;
+
+        if (estimateTokens(messages) <= maxRequestTokens || messages.Count <= 2)
+            return messages;
+
+        var mandatoryMessages = messages.Take(2).ToArray();
+        var mandatoryTokens = estimateTokens(mandatoryMessages);
+
+        if (mandatoryTokens >= maxRequestTokens)
+            return mandatoryMessages;
+
+        var groups = BuildMessageGroups(messages.Skip(2)).ToArray();
+        var selectedGroups = new Stack<IReadOnlyList<AiChatMessage>>();
+        var omittedMessages = 0;
+
+        for (var index = groups.Length - 1; index >= 0; index--)
+        {
+            var group = groups[index];
+            var candidate = mandatoryMessages
+                .Concat(group)
+                .Concat(selectedGroups.SelectMany(selectedGroup => selectedGroup))
+                .ToArray();
+
+            if (estimateTokens(candidate) <= maxRequestTokens)
+            {
+                selectedGroups.Push(group);
+            }
+            else
+            {
+                omittedMessages += groups
+                    .Take(index + 1)
+                    .Sum(omittedGroup => omittedGroup.Count);
+                break;
+            }
+        }
+
+        var omittedNotice = new AiChatMessage
+        {
+            Role = "user",
+            Content = $"Earlier conversation history was omitted to stay within the configured request token limit. Omitted messages: {omittedMessages}."
+        };
+
+        var result = new List<AiChatMessage>(messages.Count)
+        {
+            mandatoryMessages[0],
+            mandatoryMessages[1]
+        };
+
+        var resultWithOmittedNotice = result
+            .Append(omittedNotice)
+            .Concat(selectedGroups.SelectMany(group => group))
+            .ToArray();
+
+        if (omittedMessages > 0 && estimateTokens(resultWithOmittedNotice) <= maxRequestTokens)
+            result.Add(omittedNotice);
+
+        foreach (var group in selectedGroups)
+            result.AddRange(group);
+
+        return result;
+    }
+
+    private static IEnumerable<IReadOnlyList<AiChatMessage>> BuildMessageGroups(IEnumerable<AiChatMessage> messages)
+    {
+        var pending = new List<AiChatMessage>();
+
+        foreach (var message in messages)
+        {
+            if (message is { Role: "assistant", ToolCalls.Count: > 0 })
+            {
+                if (pending.Count > 0)
+                {
+                    yield return pending.ToArray();
+                    pending.Clear();
+                }
+
+                pending.Add(message);
+                continue;
+            }
+
+            switch (pending.Count)
+            {
+                case > 0 when message.Role == "tool":
+                    pending.Add(message);
+                    continue;
+                case > 0:
+                    yield return pending.ToArray();
+                    pending.Clear();
+
+                    break;
+            }
+
+            yield return [message];
+        }
+
+        if (pending.Count > 0)
+            yield return pending.ToArray();
+    }
+
+    private static int EstimateTokens(IReadOnlyList<AiChatMessage> messages) =>
+        messages.Sum(EstimateTokens);
+
+    private static int EstimateTokens(AiChatMessage message)
+    {
+        var chars = message.Role.Length + message.Content.Length + (message.Name?.Length ?? 0) + (message.ToolCallId?.Length ?? 0);
+
+        if (message.ToolCalls is null)
+            return Math.Max(1, (int)Math.Ceiling(chars / 4d));
+
+        foreach (var toolCall in message.ToolCalls)
+            chars += toolCall.Id.Length + toolCall.Name.Length + toolCall.ArgumentsJson.Length;
+
+        return Math.Max(1, (int)Math.Ceiling(chars / 4d));
+    }
+
     private static int FindRecentStartIndex(IReadOnlyList<AiChatMessage> messages, int recentToolCallTurns)
     {
         var turns = 0;
@@ -66,7 +206,7 @@ internal static class CodebaseConversationCompactor
 
         foreach (var message in compactedMessages)
         {
-            if (message.Role == "assistant" && message.ToolCalls is { Count: > 0 })
+            if (message is { Role: "assistant", ToolCalls.Count: > 0 })
             {
                 currentAssistant = message;
                 continue;

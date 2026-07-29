@@ -1,6 +1,7 @@
 using AiAssertions.Core.Abstractions;
 using AiAssertions.Core.Agent;
 using AiAssertions.Core.Assertions;
+using AiAssertions.Core.Models;
 
 namespace AiAssertions;
 
@@ -12,7 +13,15 @@ public sealed class CodebaseAssertion
     private readonly IToolCallingClient _client;
     private readonly IReadOnlyList<string> _includedPaths;
     private readonly IReadOnlyList<string> _includedTypes;
+    private readonly string? _systemPrompt;
+    private readonly string? _additionalSystemPrompt;
     private readonly int _maxToolIterations;
+    private readonly int? _maxRequestTokens;
+    private readonly Func<IReadOnlyList<AiChatMessage>, int>? _requestTokenEstimator;
+    private readonly bool _conversationCompactionEnabled;
+    private readonly int _recentToolCallTurns;
+    private readonly int _maxCompactedToolResultChars;
+    private readonly Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>>? _conversationCompactor;
     private readonly double _minimumFalseConfidence;
     private readonly double _minimumTrueConfidence;
     private readonly TimeSpan _timeout;
@@ -22,8 +31,16 @@ public sealed class CodebaseAssertion
             client,
             [],
             [],
+            null,
+            null,
             defaults.Timeout,
             defaults.MaxToolIterations,
+            defaults.MaxRequestTokens,
+            defaults.RequestTokenEstimator,
+            defaults.ConversationCompactionEnabled,
+            defaults.RecentToolCallTurns,
+            defaults.MaxCompactedToolResultChars,
+            defaults.ConversationCompactor,
             defaults.MinimumTrueConfidence,
             defaults.MinimumFalseConfidence)
     {
@@ -33,16 +50,32 @@ public sealed class CodebaseAssertion
         IToolCallingClient client,
         IReadOnlyList<string> includedPaths,
         IReadOnlyList<string> includedTypes,
+        string? systemPrompt,
+        string? additionalSystemPrompt,
         TimeSpan timeout,
         int maxToolIterations,
+        int? maxRequestTokens,
+        Func<IReadOnlyList<AiChatMessage>, int>? requestTokenEstimator,
+        bool conversationCompactionEnabled,
+        int recentToolCallTurns,
+        int maxCompactedToolResultChars,
+        Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>>? conversationCompactor,
         double minimumTrueConfidence,
         double minimumFalseConfidence)
     {
         _client = client;
         _includedPaths = includedPaths;
         _includedTypes = includedTypes;
+        _systemPrompt = systemPrompt;
+        _additionalSystemPrompt = additionalSystemPrompt;
         _timeout = timeout;
         _maxToolIterations = maxToolIterations;
+        _maxRequestTokens = maxRequestTokens;
+        _requestTokenEstimator = requestTokenEstimator;
+        _conversationCompactionEnabled = conversationCompactionEnabled;
+        _recentToolCallTurns = recentToolCallTurns;
+        _maxCompactedToolResultChars = maxCompactedToolResultChars;
+        _conversationCompactor = conversationCompactor;
         _minimumTrueConfidence = minimumTrueConfidence;
         _minimumFalseConfidence = minimumFalseConfidence;
     }
@@ -71,6 +104,130 @@ public sealed class CodebaseAssertion
             throw new ArgumentOutOfRangeException(nameof(maxToolIterations), "Max tool iterations must be positive.");
 
         return Clone(maxToolIterations: maxToolIterations);
+    }
+
+    /// <summary>
+    /// <para>
+    /// <c>EXPERIMENTAL</c>
+    /// </para>
+    /// Limits the approximate number of message tokens sent with each model request.
+    /// Older conversation history is omitted when necessary.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The system prompt and initial user message are always preserved, even when they exceed the limit. The newest
+    /// messages are then kept while older messages are omitted. Tool calls and their results are kept or omitted
+    /// together to preserve valid conversation history.
+    /// </para>
+    /// <para>
+    /// This is a best-effort limit based on the configured token estimator. Tool definitions and provider-specific
+    /// request overhead are not included.
+    /// </para>
+    /// </remarks>
+    /// <param name="maxTokens">The approximate message-token limit for each model request.</param>
+    /// <returns>A new assertion builder with the token limit configured.</returns>
+    public CodebaseAssertion WithApproximateTokenLimit(int maxTokens)
+    {
+        if (maxTokens <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxTokens), "Token limit must be positive.");
+
+        return Clone(maxRequestTokens: maxTokens);
+    }
+
+    /// <summary>
+    /// <para>
+    /// <c>EXPERIMENTAL</c>
+    /// </para>
+    /// Sets the function used to estimate the token count of messages before each model request.
+    /// </summary>
+    /// <remarks>
+    /// The returned estimate is compared with the limit configured by
+    /// <see cref="WithApproximateTokenLimit(int)"/>. Tool definitions and provider-specific request overhead are not
+    /// passed to the estimator.
+    /// </remarks>
+    /// <param name="tokenEstimator">
+    /// A function that receives the selected request messages and returns their estimated token count.
+    /// </param>
+    /// <returns>A new assertion builder with the token estimator configured.</returns>
+    public CodebaseAssertion WithTokenEstimator(Func<IReadOnlyList<AiChatMessage>, int> tokenEstimator)
+    {
+        ArgumentNullException.ThrowIfNull(tokenEstimator);
+
+        return Clone(requestTokenEstimator: tokenEstimator);
+    }
+
+    /// <summary>
+    /// Replaces the codebase assertion agent's default system prompt.
+    /// </summary>
+    /// <param name="systemPrompt">The complete system prompt to send instead of the default prompt.</param>
+    /// <returns>A new assertion builder with the replacement system prompt configured.</returns>
+    public CodebaseAssertion WithSystemPrompt(string systemPrompt)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(systemPrompt);
+
+        return Clone(systemPrompt: systemPrompt);
+    }
+
+    /// <summary>
+    /// Appends instructions to the system prompt.
+    /// </summary>
+    /// <remarks>
+    /// Multiple calls append instructions in the order they are made.
+    /// </remarks>
+    /// <param name="additionalSystemPrompt">The instructions to append.</param>
+    /// <returns>A new assertion builder with the additional instructions configured.</returns>
+    public CodebaseAssertion WithAdditionalSystemPrompt(string additionalSystemPrompt)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(additionalSystemPrompt);
+
+        var prompt = string.IsNullOrWhiteSpace(_additionalSystemPrompt)
+            ? additionalSystemPrompt
+            : string.Concat(_additionalSystemPrompt.TrimEnd(), Environment.NewLine, Environment.NewLine, additionalSystemPrompt.Trim());
+
+        return Clone(additionalSystemPrompt: prompt);
+    }
+
+    /// <summary>
+    /// Disables the default summarization of older conversation history.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// By default, older tool calls and results are summarized and truncated while recent tool-call turns are kept unchanged.
+    /// Disabling compaction sends the complete history to the model.
+    /// </para>
+    /// <para>
+    /// If <see cref="WithApproximateTokenLimit(int)"/> is configured, older messages may still be omitted to satisfy
+    /// that limit.
+    /// </para>
+    /// </remarks>
+    /// <returns>A new assertion builder with conversation compaction disabled.</returns>
+    public CodebaseAssertion WithoutConversationCompaction() =>
+        Clone(conversationCompactionEnabled: false, resetConversationCompactor: true);
+
+    /// <summary>
+    /// Replaces the default conversation compactor with a function that selects the messages sent with each model
+    /// request.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The function receives the complete conversation accumulated so far. It may summarize, remove, or reorder
+    /// messages, but should preserve enough context for the model to continue the assertion.
+    /// </para>
+    /// <para>
+    /// If <see cref="WithApproximateTokenLimit(int)"/> is configured, its limit is applied after this function.
+    /// </para>
+    /// </remarks>
+    /// <param name="conversationCompactor">
+    /// A function that receives the complete conversation and returns the messages for the next model request.
+    /// </param>
+    /// <returns>A new assertion builder with a custom conversation compactor configured.</returns>
+    public CodebaseAssertion WithConversationCompactor(Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>> conversationCompactor)
+    {
+        ArgumentNullException.ThrowIfNull(conversationCompactor);
+
+        return Clone(
+            conversationCompactionEnabled: true,
+            conversationCompactor: conversationCompactor);
     }
 
     /// <summary>
@@ -184,8 +341,16 @@ public sealed class CodebaseAssertion
         {
             IncludedPaths = _includedPaths,
             IncludedTypes = _includedTypes,
+            SystemPrompt = _systemPrompt,
+            AdditionalSystemPrompt = _additionalSystemPrompt,
             Timeout = timeout,
             MaxToolIterations = _maxToolIterations,
+            MaxRequestTokens = _maxRequestTokens,
+            RequestTokenEstimator = _requestTokenEstimator,
+            ConversationCompactionEnabled = _conversationCompactionEnabled,
+            RecentToolCallTurns = _recentToolCallTurns,
+            MaxCompactedToolResultChars = _maxCompactedToolResultChars,
+            ConversationCompactor = _conversationCompactor,
             MinimumTrueConfidence = _minimumTrueConfidence,
             MinimumFalseConfidence = _minimumFalseConfidence
         })
@@ -252,16 +417,33 @@ public sealed class CodebaseAssertion
     private CodebaseAssertion Clone(
         IReadOnlyList<string>? includedPaths = null,
         IReadOnlyList<string>? includedTypes = null,
+        string? systemPrompt = null,
+        string? additionalSystemPrompt = null,
         TimeSpan? timeout = null,
         int? maxToolIterations = null,
+        int? maxRequestTokens = null,
+        Func<IReadOnlyList<AiChatMessage>, int>? requestTokenEstimator = null,
+        bool? conversationCompactionEnabled = null,
+        int? recentToolCallTurns = null,
+        int? maxCompactedToolResultChars = null,
+        Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>>? conversationCompactor = null,
+        bool resetConversationCompactor = false,
         double? minimumTrueConfidence = null,
         double? minimumFalseConfidence = null) =>
         new(
             _client,
             includedPaths ?? _includedPaths,
             includedTypes ?? _includedTypes,
+            systemPrompt ?? _systemPrompt,
+            additionalSystemPrompt ?? _additionalSystemPrompt,
             timeout ?? _timeout,
             maxToolIterations ?? _maxToolIterations,
+            maxRequestTokens ?? _maxRequestTokens,
+            requestTokenEstimator ?? _requestTokenEstimator,
+            conversationCompactionEnabled ?? _conversationCompactionEnabled,
+            recentToolCallTurns ?? _recentToolCallTurns,
+            maxCompactedToolResultChars ?? _maxCompactedToolResultChars,
+            resetConversationCompactor ? null : conversationCompactor ?? _conversationCompactor,
             minimumTrueConfidence ?? _minimumTrueConfidence,
             minimumFalseConfidence ?? _minimumFalseConfidence);
 
