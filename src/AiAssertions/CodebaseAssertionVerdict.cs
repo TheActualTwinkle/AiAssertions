@@ -16,7 +16,7 @@ public enum CodebaseAssertionVerdict : byte
     Failed,
 
     /// <summary>
-    /// The model could not make a conclusive determination.
+    /// The model could not make a conclusive determination, or its confidence was below the configured threshold.
     /// </summary>
     NotDetermined
 }

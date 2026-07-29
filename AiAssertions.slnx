@@ -16,4 +16,7 @@
     <Project Path="src/AiAssertions.OpenAi/AiAssertions.OpenAi.csproj" />
     <Project Path="src/AiAssertions.OpenRouter/AiAssertions.OpenRouter.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AiAssertions.Tests/AiAssertions.Tests.csproj" />
+  </Folder>
 </Solution>

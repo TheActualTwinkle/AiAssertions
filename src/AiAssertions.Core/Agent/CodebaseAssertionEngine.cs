@@ -10,35 +10,38 @@ namespace AiAssertions.Core.Agent;
 
 internal sealed class CodebaseAssertionEngine
 {
-    private const string SystemPrompt = """
-                                        You are AiAssert, a strict codebase assertion agent.
-                                        Decide whether the requirement is satisfied by gathering evidence with tools.
-                                        You cannot access the filesystem directly. Use only the provided tools.
-                                        The user message includes execution_context.codebase_root. Use that root for tool calls.
-                                        Do not guess when evidence can be gathered.
-                                        If the conversation contains a compacted assertion state, treat it as previously gathered tool evidence.
-                                        
-                                        Batch independent tool calls aggressively.
-                                        If you know several files, names, or searches that are all needed, request all of those tool calls in the same assistant turn.
-                                        Prefer one broad discovery turn followed by one batched evidence-reading turn over many single-tool turns.
-                                        Do not wait for read_file("A.cs") before requesting read_file("B.cs") when both files are already known.
-                                        
-                                        When you ready to return a verdict, do not call any more tools and return the JSON in a single code block.
-                                        Return the final verdict as strict JSON only:
-                                        {"passed":true|false,"confidence":0.0-1.0,"is_conclusive":true|false,"reason":"...","evidence":[{"file":"...","start_line":1,"end_line":3,"description":"..."}],"missing_evidence":[{"description":"...","expected_location":"..."}]}
-                                        If you cannot find enough relevant code or evidence, return "is_conclusive": false, "passed": false, and explain what is missing.
-                                        Most important rule:
-                                        Never return any other text outside the JSON code block. Do not include any additional commentary or explanations.
-                                        "reason" must be a concise summary of the evidence and reasoning behind the verdict with max 150 characters. 
-                                        "evidence" must contain only concrete code evidence with exact file paths (relative to codebase root) and one-based line ranges.
-                                        "missing_evidence" must describe relevant evidence that was expected or needed but not found.
-                                        If any of this rules are violated, the verdict will be considered invalid and the assertion will fail.
+    private const string DefaultSystemPrompt = """
+                                                You are AiAssert, a strict codebase assertion agent.
+                                                Decide whether the requirement is satisfied by gathering evidence with tools.
+                                                You cannot access the filesystem directly. Use only the provided tools.
+                                                The user message includes execution_context.codebase_root. Use that root for tool calls.
+                                                Do not guess when evidence can be gathered.
+                                                If the conversation contains a compacted assertion state, treat it as previously gathered tool evidence.
 
-                                        THIS IS AN EXAMPLE OF A GOOD VERDICT:
-                                        ```json
-                                        {"passed":true,"confidence":1.0,"is_conclusive":true,"reason":"Password is hashed with salt before storage; no plain text stored or logged.","evidence":[{"file":"SampleCode/Security/PasswordRegistrationService.cs","start_line":12,"end_line":22,"description":"Password hash and salt are created before user registration."},{"file":"SampleCode/Security/RegisteredUser.cs","start_line":3,"end_line":8,"description":"Registered user stores only password hash and salt."}],"missing_evidence":[]}
-                                        ```
-                                        """;
+                                                Batch independent tool calls aggressively.
+                                                If you know several files, names, or searches that are all needed, request all of those tool calls in the same assistant turn.
+                                                Prefer one broad discovery turn followed by one batched evidence-reading turn over many single-tool turns.
+                                                Do not wait for read_file("A.cs") before requesting read_file("B.cs") when both files are already known.
+
+                                                When you ready to return a verdict, do not call any more tools and return the JSON in a single code block.
+                                                Return the final verdict as strict JSON only:
+                                                {"passed":true|false,"confidence":0.0-1.0,"is_conclusive":true|false,"reason":"...","evidence":[{"file":"...","start_line":1,"end_line":3,"description":"..."}],"missing_evidence":[{"description":"...","expected_location":"..."}]}
+                                                If you cannot find enough relevant code or evidence, return "is_conclusive": false, "passed": false, and explain what is missing.
+                                                Most important rule:
+                                                Never return any other text outside the JSON code block. Do not include any additional commentary or explanations.
+                                                "reason" must be a concise summary of the evidence and reasoning behind the verdict with max 150 characters.
+                                                "evidence" must contain only concrete code evidence with exact file paths (relative to codebase root) and one-based line ranges.
+                                                "missing_evidence" must describe relevant evidence that was expected or needed but not found.
+                                                If any of this rules are violated, the verdict will be considered invalid and the assertion will fail.
+
+                                                NEVER ESCAPE FILE PATHS. Use forward slashes (/) only as directory separators, even on Windows.
+                                                e.g.: "file":"SampleCode/Security/PasswordRegistrationService.cs"
+
+                                                THIS IS AN EXAMPLE OF A GOOD VERDICT:
+                                                ```json
+                                                {"passed":true,"confidence":1.0,"is_conclusive":true,"reason":"Password is hashed with salt before storage; no plain text stored or logged.","evidence":[{"file":"SampleCode/Security/PasswordRegistrationService.cs","start_line":12,"end_line":22,"description":"Password hash and salt are created before user registration."},{"file":"SampleCode/Security/RegisteredUser.cs","start_line":3,"end_line":8,"description":"Registered user stores only password hash and salt."}],"missing_evidence":[]}
+                                                ```
+                                                """;
 
     private readonly IToolCallingClient _client;
     private readonly CodebaseAssertionOptions _options;
@@ -103,7 +106,7 @@ internal sealed class CodebaseAssertionEngine
             new()
             {
                 Role = "system",
-                Content = SystemPrompt
+                Content = BuildSystemPrompt()
             },
             new()
             {
@@ -116,8 +119,12 @@ internal sealed class CodebaseAssertionEngine
         {
             var requestMessages = CodebaseConversationCompactor.BuildRequestMessages(
                 messages,
+                _options.ConversationCompactor,
+                _options.ConversationCompactionEnabled,
                 _options.RecentToolCallTurns,
-                _options.MaxCompactedToolResultChars);
+                _options.MaxCompactedToolResultChars,
+                _options.MaxRequestTokens,
+                _options.RequestTokenEstimator);
 
             var response = await _client
                 .GetToolResponseAsync(
@@ -184,6 +191,15 @@ internal sealed class CodebaseAssertionEngine
             ],
             IsConclusive = false
         };
+    }
+
+    private string BuildSystemPrompt()
+    {
+        var systemPrompt = _options.SystemPrompt ?? DefaultSystemPrompt;
+
+        return string.IsNullOrWhiteSpace(_options.AdditionalSystemPrompt)
+            ? systemPrompt
+            : string.Concat(systemPrompt.TrimEnd(), Environment.NewLine, Environment.NewLine, _options.AdditionalSystemPrompt.Trim());
     }
 
     private async Task<string> BuildUserMessageAsync(string requirement, string codebaseRoot, CancellationToken cancellationToken)
