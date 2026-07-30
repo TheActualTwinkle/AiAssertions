@@ -8,6 +8,10 @@ internal sealed record AiAssertDefaults
 
     internal int MaxToolIterations { get; init; } = 300;
 
+    internal string? SystemPrompt { get; init; }
+
+    internal string? AdditionalSystemPrompt { get; init; }
+
     internal int? MaxRequestTokens { get; init; }
 
     internal Func<IReadOnlyList<AiChatMessage>, int>? RequestTokenEstimator { get; init; }

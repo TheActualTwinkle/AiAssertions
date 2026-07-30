@@ -31,8 +31,8 @@ public sealed class CodebaseAssertion
             client,
             [],
             [],
-            null,
-            null,
+            defaults.SystemPrompt,
+            defaults.AdditionalSystemPrompt,
             defaults.Timeout,
             defaults.MaxToolIterations,
             defaults.MaxRequestTokens,
@@ -154,37 +154,6 @@ public sealed class CodebaseAssertion
         ArgumentNullException.ThrowIfNull(tokenEstimator);
 
         return Clone(requestTokenEstimator: tokenEstimator);
-    }
-
-    /// <summary>
-    /// Replaces the codebase assertion agent's default system prompt.
-    /// </summary>
-    /// <param name="systemPrompt">The complete system prompt to send instead of the default prompt.</param>
-    /// <returns>A new assertion builder with the replacement system prompt configured.</returns>
-    public CodebaseAssertion WithSystemPrompt(string systemPrompt)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(systemPrompt);
-
-        return Clone(systemPrompt: systemPrompt);
-    }
-
-    /// <summary>
-    /// Appends instructions to the system prompt.
-    /// </summary>
-    /// <remarks>
-    /// Multiple calls append instructions in the order they are made.
-    /// </remarks>
-    /// <param name="additionalSystemPrompt">The instructions to append.</param>
-    /// <returns>A new assertion builder with the additional instructions configured.</returns>
-    public CodebaseAssertion WithAdditionalSystemPrompt(string additionalSystemPrompt)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(additionalSystemPrompt);
-
-        var prompt = string.IsNullOrWhiteSpace(_additionalSystemPrompt)
-            ? additionalSystemPrompt
-            : string.Concat(_additionalSystemPrompt.TrimEnd(), Environment.NewLine, Environment.NewLine, additionalSystemPrompt.Trim());
-
-        return Clone(additionalSystemPrompt: prompt);
     }
 
     /// <summary>
@@ -417,8 +386,6 @@ public sealed class CodebaseAssertion
     private CodebaseAssertion Clone(
         IReadOnlyList<string>? includedPaths = null,
         IReadOnlyList<string>? includedTypes = null,
-        string? systemPrompt = null,
-        string? additionalSystemPrompt = null,
         TimeSpan? timeout = null,
         int? maxToolIterations = null,
         int? maxRequestTokens = null,
@@ -434,8 +401,8 @@ public sealed class CodebaseAssertion
             _client,
             includedPaths ?? _includedPaths,
             includedTypes ?? _includedTypes,
-            systemPrompt ?? _systemPrompt,
-            additionalSystemPrompt ?? _additionalSystemPrompt,
+            _systemPrompt,
+            _additionalSystemPrompt,
             timeout ?? _timeout,
             maxToolIterations ?? _maxToolIterations,
             maxRequestTokens ?? _maxRequestTokens,

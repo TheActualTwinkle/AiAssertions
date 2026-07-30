@@ -1,3 +1,5 @@
+using AiAssertions.Core.Models;
+
 namespace AiAssertions;
 
 /// <summary>
@@ -43,6 +45,141 @@ public sealed class AiAssertConfiguration
         var defaults = _getDefaults();
         
         _setDefaults(defaults with { MaxToolIterations = maxToolIterations });
+
+        return this;
+    }
+
+    /// <summary>
+    /// <para>
+    /// <c>EXPERIMENTAL</c>
+    /// </para>
+    /// Sets the global approximate message-token limit for each model request.
+    /// </summary>
+    /// <remarks>
+    /// The system prompt and initial user message are always preserved. The limit is applied after conversation
+    /// compaction and does not include tool definitions or provider-specific request overhead.
+    /// </remarks>
+    /// <param name="maxTokens">The approximate message-token limit for each model request.</param>
+    /// <returns>The same configuration builder.</returns>
+    public AiAssertConfiguration WithGlobalApproximateTokenLimit(int maxTokens)
+    {
+        if (maxTokens <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxTokens), "Token limit must be positive.");
+
+        var defaults = _getDefaults();
+        _setDefaults(defaults with { MaxRequestTokens = maxTokens });
+
+        return this;
+    }
+
+    /// <summary>
+    /// <para>
+    /// <c>EXPERIMENTAL</c>
+    /// </para>
+    /// Sets the global function used to estimate the token count of messages before each model request.
+    /// </summary>
+    /// <remarks>
+    /// The returned estimate is compared with the limit configured by
+    /// <see cref="WithGlobalApproximateTokenLimit(int)"/>.
+    /// </remarks>
+    /// <param name="tokenEstimator">
+    /// A function that receives the selected request messages and returns their estimated token count.
+    /// </param>
+    /// <returns>The same configuration builder.</returns>
+    public AiAssertConfiguration WithGlobalTokenEstimator(Func<IReadOnlyList<AiChatMessage>, int> tokenEstimator)
+    {
+        ArgumentNullException.ThrowIfNull(tokenEstimator);
+
+        var defaults = _getDefaults();
+        _setDefaults(defaults with { RequestTokenEstimator = tokenEstimator });
+
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the global replacement for the codebase assertion agent's default system prompt.
+    /// </summary>
+    /// <param name="systemPrompt">The complete system prompt to use for codebase assertions.</param>
+    /// <returns>The same configuration builder.</returns>
+    public AiAssertConfiguration WithGlobalSystemPrompt(string systemPrompt)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(systemPrompt);
+
+        var defaults = _getDefaults();
+        _setDefaults(defaults with { SystemPrompt = systemPrompt });
+
+        return this;
+    }
+
+    /// <summary>
+    /// Appends global instructions to the system prompt used by codebase assertions.
+    /// </summary>
+    /// <remarks>
+    /// Multiple calls append instructions in the order they are made.
+    /// </remarks>
+    /// <param name="additionalSystemPrompt">The instructions to append.</param>
+    /// <returns>The same configuration builder.</returns>
+    public AiAssertConfiguration WithGlobalAdditionalSystemPrompt(string additionalSystemPrompt)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(additionalSystemPrompt);
+
+        var defaults = _getDefaults();
+        var prompt = string.IsNullOrWhiteSpace(defaults.AdditionalSystemPrompt)
+            ? additionalSystemPrompt
+            : string.Concat(
+                defaults.AdditionalSystemPrompt.TrimEnd(),
+                Environment.NewLine,
+                Environment.NewLine,
+                additionalSystemPrompt.Trim());
+
+        _setDefaults(defaults with { AdditionalSystemPrompt = prompt });
+
+        return this;
+    }
+
+    /// <summary>
+    /// Globally disables the default summarization of older conversation history.
+    /// </summary>
+    /// <remarks>
+    /// A global approximate token limit may still omit older messages. Calling this method after
+    /// <see cref="WithGlobalConversationCompactor(Func{IReadOnlyList{AiChatMessage}, IReadOnlyList{AiChatMessage}})"/>
+    /// also removes the custom compactor.
+    /// </remarks>
+    /// <returns>The same configuration builder.</returns>
+    public AiAssertConfiguration WithoutGlobalConversationCompaction()
+    {
+        var defaults = _getDefaults();
+        _setDefaults(defaults with
+        {
+            ConversationCompactionEnabled = false,
+            ConversationCompactor = null
+        });
+
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the global function that selects the conversation messages sent with each model request.
+    /// </summary>
+    /// <remarks>
+    /// The function receives the complete accumulated conversation. Configuring a custom compactor enables
+    /// conversation compaction. A global approximate token limit is applied after this function.
+    /// </remarks>
+    /// <param name="conversationCompactor">
+    /// A function that receives the complete conversation and returns the messages for the next model request.
+    /// </param>
+    /// <returns>The same configuration builder.</returns>
+    public AiAssertConfiguration WithGlobalConversationCompactor(
+        Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>> conversationCompactor)
+    {
+        ArgumentNullException.ThrowIfNull(conversationCompactor);
+
+        var defaults = _getDefaults();
+        _setDefaults(defaults with
+        {
+            ConversationCompactionEnabled = true,
+            ConversationCompactor = conversationCompactor
+        });
 
         return this;
     }

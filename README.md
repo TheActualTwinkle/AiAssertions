@@ -52,6 +52,8 @@ AiAssert
     // If the model does not return a verdict within this time, the result verdict is NotDetermined.
     .WithDefaultTimeout(TimeSpan.FromMinutes(1)) // Optional: override default timeout for all assertions.
     .WithDefaultMaxToolIterations(300) // Optional: override default tool-calling iteration limit.
+    .WithGlobalApproximateTokenLimit(32_000) // Optional: limit conversation tokens for all assertions.
+    .WithGlobalAdditionalSystemPrompt("Prefer direct code evidence over inference.")
     // Confedence tolerance is a threshold for the model's confidence in its verdict. 
     // If the model returns a confidence below this threshold, the assertion fails.
     .WithGlobalConfidenceTolerance(0.85); // Optional: override default confidence tolerance for all assertions.
