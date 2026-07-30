@@ -8,8 +8,6 @@ namespace AiAssertions.Tests;
 
 public sealed class CodebaseAssertionConfigurationTests
 {
-    private const string DefaultSystemPromptStart = "You are AiAssert, a strict codebase assertion agent.";
-
     private const string Verdict = """
                                    ```json
                                    {"passed":true,"confidence":1.0,"is_conclusive":true,"reason":"ok","evidence":[],"missing_evidence":[]}
@@ -68,7 +66,7 @@ public sealed class CodebaseAssertionConfigurationTests
         var resultSummary = completedToolCall.GetProperty("result_summary").GetString();
         resultSummary.Should().NotBeNullOrWhiteSpace();
 
-        using var result = JsonDocument.Parse(resultSummary!);
+        using var result = JsonDocument.Parse(resultSummary);
         result.RootElement.GetProperty("projects").EnumerateArray()
             .Select(project => project.GetString())
             .Should().Contain("src/AiAssertions.Core/AiAssertions.Core.csproj");
@@ -172,48 +170,60 @@ public sealed class CodebaseAssertionConfigurationTests
     }
 
     [Fact]
-    public async Task CodebaseAssertion_WhenSystemPromptIsConfigured_ShouldReplaceDefaultSystemPrompt()
+    public async Task CodebaseAssertion_WhenGlobalSystemPromptsAreConfigured_ShouldUseThem()
     {
         var client = new RecordingToolCallingClient(VerdictResponse());
+        var defaults = new AiAssertDefaults
+        {
+            SystemPrompt = "global system prompt",
+            AdditionalSystemPrompt = "global additional instruction"
+        };
 
-        await CreateAssertion(client)
-            .WithSystemPrompt("replacement prompt")
-            .That("requirement");
-
-        client.Requests[0].Messages[0].Content.Should().Be("replacement prompt");
-    }
-
-    [Fact]
-    public async Task CodebaseAssertion_WhenMultipleAdditionalSystemPromptsAreConfigured_ShouldAppendPromptsInCallOrder()
-    {
-        var client = new RecordingToolCallingClient(VerdictResponse());
-
-        await CreateAssertion(client)
-            .WithSystemPrompt("base")
-            .WithAdditionalSystemPrompt("first")
-            .WithAdditionalSystemPrompt("second")
-            .That("requirement");
+        await CreateAssertion(client, defaults).That("requirement");
 
         var separator = Environment.NewLine + Environment.NewLine;
-        client.Requests[0].Messages[0].Content.Should().Be($"base{separator}first{separator}second");
+        client.Requests[0].Messages[0].Content.Should()
+            .Be($"global system prompt{separator}global additional instruction");
     }
 
     [Fact]
-    public async Task CodebaseAssertion_WhenAdditionalSystemPromptIsConfigured_ShouldAppendItToDefaultSystemPrompt()
+    public async Task CodebaseAssertion_WhenGlobalTokenAndCompactorDefaultsAreConfigured_ShouldApplyThem()
     {
         var client = new RecordingToolCallingClient(VerdictResponse());
+        var oldLargeMessage = Message("assistant", "old-message-that-does-not-fit");
+        var newestMessage = Message("assistant", "new");
+        var compactorCalls = 0;
+        const int maxTokens = 103;
 
-        await CreateAssertion(client)
-            .WithAdditionalSystemPrompt("additional instruction")
-            .That("requirement");
+        var defaults = new AiAssertDefaults
+        {
+            MaxRequestTokens = maxTokens,
+            RequestTokenEstimator = EstimateTokens,
+            ConversationCompactor = messages =>
+            {
+                compactorCalls++;
 
-        var systemPrompt = client.Requests[0].Messages[0].Content;
-        systemPrompt.Should().StartWith(DefaultSystemPromptStart);
-        systemPrompt.Should().EndWith($"{Environment.NewLine}{Environment.NewLine}additional instruction");
+                return [messages[0], messages[1], oldLargeMessage, newestMessage];
+            }
+        };
+
+        await CreateAssertion(client, defaults).That("requirement");
+
+        compactorCalls.Should().Be(1);
+        client.Requests[0].Messages.Should().Contain(newestMessage);
+        client.Requests[0].Messages.Should().NotContain(oldLargeMessage);
+        EstimateTokens(client.Requests[0].Messages).Should().BeLessThanOrEqualTo(maxTokens);
+
+        return;
+
+        int EstimateTokens(IReadOnlyList<AiChatMessage> messages) =>
+            100 + messages.Sum(message => ReferenceEquals(message, oldLargeMessage) ? 10_000 : 1);
     }
 
-    private static CodebaseAssertion CreateAssertion(IToolCallingClient client) =>
-        new(client, new AiAssertDefaults());
+    private static CodebaseAssertion CreateAssertion(
+        IToolCallingClient client,
+        AiAssertDefaults? defaults = null) =>
+        new(client, defaults ?? new AiAssertDefaults());
 
     private static AiToolResponse ToolCallResponse(string id) =>
         new()
