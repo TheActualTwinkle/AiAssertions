@@ -11,7 +11,7 @@ public sealed class CodebaseToolsTests
     [Fact]
     public async Task ReadFile_WhenFileContainsUnicode_ShouldReturnCompactPaginationMetadataWithoutEscapedUnicode()
     {
-        using var directory = new TemporaryDirectory();
+        using var directory = new CodebaseToolsTestTemporaryDirectory();
         await File.WriteAllTextAsync(directory.File("README.md"), "Первая\nВторая\nТретья");
         var context = new ToolExecutionContext(directory.Path, directory.Path);
 
@@ -35,7 +35,7 @@ public sealed class CodebaseToolsTests
     [Fact]
     public async Task FileTools_WhenRepositoryContainsIgnoredFiles_ShouldUseSharedFilteredIndex()
     {
-        using var directory = new TemporaryDirectory();
+        using var directory = new CodebaseToolsTestTemporaryDirectory();
         Directory.CreateDirectory(directory.File("src"));
         Directory.CreateDirectory(directory.File("ignored"));
         Directory.CreateDirectory(directory.File(".idea"));
@@ -69,7 +69,7 @@ public sealed class CodebaseToolsTests
     [Fact]
     public async Task SearchText_WhenRegexIsNotRequested_ShouldTreatPipeAsLiteralAndRespectScope()
     {
-        using var directory = new TemporaryDirectory();
+        using var directory = new CodebaseToolsTestTemporaryDirectory();
         Directory.CreateDirectory(directory.File("docs"));
         Directory.CreateDirectory(directory.File("other"));
         await File.WriteAllTextAsync(directory.File("docs/literal.txt"), "alpha|beta");
@@ -97,7 +97,7 @@ public sealed class CodebaseToolsTests
     [Fact]
     public async Task SearchText_WhenMatchIsAfterTwoMegabytes_ShouldFindIt()
     {
-        using var directory = new TemporaryDirectory();
+        using var directory = new CodebaseToolsTestTemporaryDirectory();
         var content = string.Concat(new string('x', (2 * 1024 * 1024) + 1), "\nneedle-after-two-megabytes\n");
         await File.WriteAllTextAsync(directory.File("large.txt"), content);
         var context = new ToolExecutionContext(directory.Path, directory.Path);
@@ -115,7 +115,7 @@ public sealed class CodebaseToolsTests
     [Fact]
     public async Task FileIndex_WhenProjectRootIsUnderIgnoredNamedAncestor_ShouldNotHideProjectFiles()
     {
-        using var directory = new TemporaryDirectory();
+        using var directory = new CodebaseToolsTestTemporaryDirectory();
         var project = directory.File(".cache/project");
         Directory.CreateDirectory(project);
         await File.WriteAllTextAsync(Path.Combine(project, "visible.txt"), "visible");
@@ -129,7 +129,7 @@ public sealed class CodebaseToolsTests
     [Fact]
     public async Task Ripgrep_WhenExecutableIsUnavailable_ShouldAllowFallback()
     {
-        using var directory = new TemporaryDirectory();
+        using var directory = new CodebaseToolsTestTemporaryDirectory();
 
         var result = await RipgrepTextSearch.TrySearchAsync(
             directory.Path,
@@ -147,7 +147,7 @@ public sealed class CodebaseToolsTests
     [Fact]
     public async Task FileTools_WhenGlobStarMatchesZeroOrMoreDirectories_ShouldUseStandardGlobSemantics()
     {
-        using var directory = new TemporaryDirectory();
+        using var directory = new CodebaseToolsTestTemporaryDirectory();
         Directory.CreateDirectory(directory.File("Source/Nested"));
         await File.WriteAllTextAsync(directory.File("Source/Root.cs"), "needle");
         await File.WriteAllTextAsync(directory.File("Source/Nested/Child.cs"), "needle");
@@ -169,7 +169,7 @@ public sealed class CodebaseToolsTests
     [Fact]
     public async Task FileTools_WhenExtensionHasNoLeadingDot_ShouldMatchInFastAndFallbackPaths()
     {
-        using var directory = new TemporaryDirectory();
+        using var directory = new CodebaseToolsTestTemporaryDirectory();
         await File.WriteAllTextAsync(directory.File("match.txt"), "needle");
         var context = new ToolExecutionContext(directory.Path, directory.Path);
 
@@ -194,7 +194,7 @@ public sealed class CodebaseToolsTests
     [Fact]
     public async Task FileIndex_WhenNestedGitIgnoreExists_ShouldApplyItRelativeToItsDirectory()
     {
-        using var directory = new TemporaryDirectory();
+        using var directory = new CodebaseToolsTestTemporaryDirectory();
         Directory.CreateDirectory(directory.File("src/generated"));
         await File.WriteAllTextAsync(directory.File("src/.gitignore"), "generated/\ncache/\n*.tmp\n!important.tmp\nfile[0-9].log\n");
         await File.WriteAllTextAsync(directory.File("src/visible.txt"), "visible");
@@ -223,8 +223,8 @@ public sealed class CodebaseToolsTests
         if (OperatingSystem.IsWindows())
             return;
 
-        using var directory = new TemporaryDirectory();
-        using var outside = new TemporaryDirectory();
+        using var directory = new CodebaseToolsTestTemporaryDirectory();
+        using var outside = new CodebaseToolsTestTemporaryDirectory();
         await File.WriteAllTextAsync(outside.File("secret.txt"), "secret");
         Directory.CreateSymbolicLink(directory.File("outside-link"), outside.Path);
         var context = new ToolExecutionContext(directory.Path, directory.Path);
@@ -240,7 +240,7 @@ public sealed class CodebaseToolsTests
     [Fact]
     public async Task SearchTools_WhenMoreResultsExist_ShouldReturnStablePaginationMetadata()
     {
-        using var directory = new TemporaryDirectory();
+        using var directory = new CodebaseToolsTestTemporaryDirectory();
         for (var index = 0; index < 5; index++)
             await File.WriteAllTextAsync(directory.File($"item-{index}.txt"), $"needle {index}");
 
@@ -291,7 +291,7 @@ public sealed class CodebaseToolsTests
     [Fact]
     public async Task TextTools_WhenLineIsVeryLarge_ShouldReturnBoundedTruncatedContentAroundMatch()
     {
-        using var directory = new TemporaryDirectory();
+        using var directory = new CodebaseToolsTestTemporaryDirectory();
         var line = string.Concat(new string('x', 1_000_000), "needle-at-the-end");
         await File.WriteAllTextAsync(directory.File("large-line.txt"), line);
         var context = new ToolExecutionContext(directory.Path, directory.Path);
@@ -318,7 +318,7 @@ public sealed class CodebaseToolsTests
     [Fact]
     public async Task ReadFile_WhenRequestedPageExceedsOutputBudget_ShouldExposeNextPage()
     {
-        using var directory = new TemporaryDirectory();
+        using var directory = new CodebaseToolsTestTemporaryDirectory();
         var lines = Enumerable.Range(1, 100).Select(index => $"{index} {new string('x', 900)}");
         await File.WriteAllLinesAsync(directory.File("many-lines.txt"), lines);
         var context = new ToolExecutionContext(directory.Path, directory.Path);
@@ -344,20 +344,4 @@ public sealed class CodebaseToolsTests
         result.GetProperty("next_offset").GetInt32().Should().Be(expectedNextOffset);
     }
 
-    private sealed class TemporaryDirectory : IDisposable
-    {
-        internal TemporaryDirectory()
-        {
-            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"AiAssertions.Tests-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(Path);
-        }
-
-        internal string Path { get; }
-
-        internal string File(string relativePath) =>
-            System.IO.Path.Combine(Path, relativePath.Replace('/', System.IO.Path.DirectorySeparatorChar));
-
-        public void Dispose() =>
-            Directory.Delete(Path, recursive: true);
-    }
 }

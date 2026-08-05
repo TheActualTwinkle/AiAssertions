@@ -17,6 +17,7 @@ public sealed class MyModelClient : IToolCallingClient
         CancellationToken cancellationToken = default)
     {
         // Send a text request to the model and return the generated plain text response.
+        // AiAssertions uses this for semantic conversation checkpoints when history grows large.
         throw new NotImplementedException();
     }
 

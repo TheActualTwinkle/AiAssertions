@@ -22,7 +22,6 @@ public sealed class CodebaseAssertion
     private readonly int _recentToolCallTurns;
     private readonly int _maxCompactedToolResultChars;
     private readonly int _maxCompactedStateChars;
-    private readonly Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>>? _conversationCompactor;
     private readonly double _minimumFalseConfidence;
     private readonly double _minimumTrueConfidence;
     private readonly TimeSpan _timeout;
@@ -42,7 +41,6 @@ public sealed class CodebaseAssertion
             defaults.RecentToolCallTurns,
             defaults.MaxCompactedToolResultChars,
             defaults.MaxCompactedStateChars,
-            defaults.ConversationCompactor,
             defaults.MinimumTrueConfidence,
             defaults.MinimumFalseConfidence)
     {
@@ -62,7 +60,6 @@ public sealed class CodebaseAssertion
         int recentToolCallTurns,
         int maxCompactedToolResultChars,
         int maxCompactedStateChars,
-        Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>>? conversationCompactor,
         double minimumTrueConfidence,
         double minimumFalseConfidence)
     {
@@ -79,7 +76,6 @@ public sealed class CodebaseAssertion
         _recentToolCallTurns = recentToolCallTurns;
         _maxCompactedToolResultChars = maxCompactedToolResultChars;
         _maxCompactedStateChars = maxCompactedStateChars;
-        _conversationCompactor = conversationCompactor;
         _minimumTrueConfidence = minimumTrueConfidence;
         _minimumFalseConfidence = minimumFalseConfidence;
     }
@@ -127,6 +123,10 @@ public sealed class CodebaseAssertion
     /// This is a best-effort limit based on the configured token estimator. Tool definitions and provider-specific
     /// request overhead are not included.
     /// </para>
+    /// <para>
+    /// This overload preserves an estimator inherited from global configuration. Use the overload with an explicit
+    /// <see langword="null"/> estimator to select the built-in approximation.
+    /// </para>
     /// </remarks>
     /// <param name="maxTokens">The approximate message-token limit for each model request.</param>
     /// <returns>A new assertion builder with the token limit configured.</returns>
@@ -139,34 +139,34 @@ public sealed class CodebaseAssertion
     }
 
     /// <summary>
-    /// <para>
-    /// <c>EXPERIMENTAL</c>
-    /// </para>
-    /// Sets the function used to estimate the token count of messages before each model request.
+    /// Limits the approximate number of message tokens sent with each model request and selects the token estimator.
     /// </summary>
-    /// <remarks>
-    /// The returned estimate is compared with the limit configured by
-    /// <see cref="WithApproximateTokenLimit(int)"/>. Tool definitions and provider-specific request overhead are not
-    /// passed to the estimator.
-    /// </remarks>
+    /// <param name="maxTokens">The approximate message-token limit for each model request.</param>
     /// <param name="tokenEstimator">
-    /// A function that receives the selected request messages and returns their estimated token count.
+    /// A custom token estimator, or <see langword="null"/> to explicitly use the built-in approximation.
     /// </param>
-    /// <returns>A new assertion builder with the token estimator configured.</returns>
-    public CodebaseAssertion WithTokenEstimator(Func<IReadOnlyList<AiChatMessage>, int> tokenEstimator)
+    /// <returns>A new assertion builder with the token limit and estimator configured.</returns>
+    public CodebaseAssertion WithApproximateTokenLimit(
+        int maxTokens,
+        Func<IReadOnlyList<AiChatMessage>, int>? tokenEstimator)
     {
-        ArgumentNullException.ThrowIfNull(tokenEstimator);
+        if (maxTokens <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxTokens), "Token limit must be positive.");
 
-        return Clone(requestTokenEstimator: tokenEstimator);
+        return Clone(
+            maxRequestTokens: maxTokens,
+            requestTokenEstimator: tokenEstimator,
+            resetRequestTokenEstimator: tokenEstimator is null);
     }
 
     /// <summary>
-    /// Disables the default summarization of older conversation history.
+    /// Disables adaptive checkpointing of older conversation history.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// By default, older tool calls and results are summarized and truncated while recent tool-call turns are kept unchanged.
-    /// Disabling compaction sends the complete history to the model.
+    /// By default, history is kept intact until it approaches the configured budget. The model then creates a semantic
+    /// checkpoint while recent tool-call turns are kept unchanged. Disabling compaction sends the complete history to
+    /// the model and prevents checkpoint requests.
     /// </para>
     /// <para>
     /// If <see cref="WithApproximateTokenLimit(int)"/> is configured, older messages may still be omitted to satisfy
@@ -175,63 +175,22 @@ public sealed class CodebaseAssertion
     /// </remarks>
     /// <returns>A new assertion builder with conversation compaction disabled.</returns>
     public CodebaseAssertion WithoutConversationCompaction() =>
-        Clone(conversationCompactionEnabled: false, resetConversationCompactor: true);
+        Clone(conversationCompactionEnabled: false);
 
     /// <summary>
-    /// Replaces the default conversation compactor with a function that selects the messages sent with each model
-    /// request.
+    /// Configures adaptive conversation checkpointing.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The function receives the complete conversation accumulated so far. It may summarize, remove, or reorder
-    /// messages, but should preserve enough context for the model to continue the assertion.
-    /// </para>
-    /// <para>
-    /// If <see cref="WithApproximateTokenLimit(int)"/> is configured, its limit is applied after this function.
-    /// </para>
-    /// </remarks>
-    /// <param name="conversationCompactor">
-    /// A function that receives the complete conversation and returns the messages for the next model request.
-    /// </param>
-    /// <returns>A new assertion builder with a custom conversation compactor configured.</returns>
-    public CodebaseAssertion WithConversationCompactor(Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>> conversationCompactor)
+    /// <param name="options">Checkpointing options.</param>
+    /// <returns>A new assertion builder with conversation checkpointing configured.</returns>
+    public CodebaseAssertion WithConversationCompaction(ConversationCompactionOptions options)
     {
-        ArgumentNullException.ThrowIfNull(conversationCompactor);
+        ArgumentNullException.ThrowIfNull(options);
+        options.Validate();
 
         return Clone(
             conversationCompactionEnabled: true,
-            conversationCompactor: conversationCompactor);
-    }
-
-    /// <summary>
-    /// Configures the bounded default conversation compactor.
-    /// </summary>
-    /// <remarks>
-    /// Calling this method after <see cref="WithConversationCompactor(Func{IReadOnlyList{AiChatMessage}, IReadOnlyList{AiChatMessage}})"/>
-    /// removes the custom compactor. A custom compactor configured later replaces the bounded default compactor.
-    /// </remarks>
-    /// <param name="recentToolCallTurns">The number of newest tool-call turns retained as protocol messages.</param>
-    /// <param name="maxToolResultChars">The maximum characters retained from a single tool result.</param>
-    /// <param name="maxCompactedStateChars">The maximum characters retained in the structured state for older tool calls.</param>
-    /// <returns>A new assertion builder with the compaction limits configured.</returns>
-    public CodebaseAssertion WithConversationCompactionLimits(
-        int recentToolCallTurns,
-        int maxToolResultChars,
-        int maxCompactedStateChars)
-    {
-        if (recentToolCallTurns <= 0)
-            throw new ArgumentOutOfRangeException(nameof(recentToolCallTurns), "Recent tool-call turns must be positive.");
-        if (maxToolResultChars <= 0)
-            throw new ArgumentOutOfRangeException(nameof(maxToolResultChars), "Maximum tool-result characters must be positive.");
-        if (maxCompactedStateChars <= 0)
-            throw new ArgumentOutOfRangeException(nameof(maxCompactedStateChars), "Maximum compacted-state characters must be positive.");
-
-        return Clone(
-            conversationCompactionEnabled: true,
-            recentToolCallTurns: recentToolCallTurns,
-            maxCompactedToolResultChars: maxToolResultChars,
-            maxCompactedStateChars: maxCompactedStateChars,
-            resetConversationCompactor: true);
+            recentToolCallTurns: options.RecentToolCallTurns,
+            maxCompactedStateChars: options.MaxCheckpointChars);
     }
 
     /// <summary>
@@ -355,7 +314,6 @@ public sealed class CodebaseAssertion
             RecentToolCallTurns = _recentToolCallTurns,
             MaxCompactedToolResultChars = _maxCompactedToolResultChars,
             MaxCompactedStateChars = _maxCompactedStateChars,
-            ConversationCompactor = _conversationCompactor,
             MinimumTrueConfidence = _minimumTrueConfidence,
             MinimumFalseConfidence = _minimumFalseConfidence
         })
@@ -426,12 +384,11 @@ public sealed class CodebaseAssertion
         int? maxToolIterations = null,
         int? maxRequestTokens = null,
         Func<IReadOnlyList<AiChatMessage>, int>? requestTokenEstimator = null,
+        bool resetRequestTokenEstimator = false,
         bool? conversationCompactionEnabled = null,
         int? recentToolCallTurns = null,
         int? maxCompactedToolResultChars = null,
         int? maxCompactedStateChars = null,
-        Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>>? conversationCompactor = null,
-        bool resetConversationCompactor = false,
         double? minimumTrueConfidence = null,
         double? minimumFalseConfidence = null) =>
         new(
@@ -443,12 +400,11 @@ public sealed class CodebaseAssertion
             timeout ?? _timeout,
             maxToolIterations ?? _maxToolIterations,
             maxRequestTokens ?? _maxRequestTokens,
-            requestTokenEstimator ?? _requestTokenEstimator,
+            resetRequestTokenEstimator ? null : requestTokenEstimator ?? _requestTokenEstimator,
             conversationCompactionEnabled ?? _conversationCompactionEnabled,
             recentToolCallTurns ?? _recentToolCallTurns,
             maxCompactedToolResultChars ?? _maxCompactedToolResultChars,
             maxCompactedStateChars ?? _maxCompactedStateChars,
-            resetConversationCompactor ? null : conversationCompactor ?? _conversationCompactor,
             minimumTrueConfidence ?? _minimumTrueConfidence,
             minimumFalseConfidence ?? _minimumFalseConfidence);
 

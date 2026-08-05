@@ -22,9 +22,7 @@ internal sealed record AiAssertDefaults
 
     internal int MaxCompactedToolResultChars { get; init; } = 3000;
 
-    internal int MaxCompactedStateChars { get; init; } = 12_000;
-
-    internal Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>>? ConversationCompactor { get; init; }
+    internal int MaxCompactedStateChars { get; init; } = 16_000;
 
     internal double MinimumTrueConfidence { get; init; }
 

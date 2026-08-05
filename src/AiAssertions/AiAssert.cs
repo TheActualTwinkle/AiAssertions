@@ -16,13 +16,13 @@ public static class AiAssert
     /// </summary>
     /// <param name="modelClient">The model client implementation to use.</param>
     /// <returns>A configuration builder for setting global AIAssert defaults.</returns>
-    public static AiAssertConfiguration Configure(IAiModelClient modelClient)
+    public static AiAssertConfiguration Configure(IToolCallingClient modelClient)
     {
         ArgumentNullException.ThrowIfNull(modelClient);
 
         lock (SyncRoot)
         {
-            _toolCallingClient = modelClient as IToolCallingClient;
+            _toolCallingClient = modelClient;
         }
 
         return new AiAssertConfiguration(GetDefaults, SetDefaults);

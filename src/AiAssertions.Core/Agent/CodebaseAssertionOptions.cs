@@ -22,9 +22,7 @@ internal sealed class CodebaseAssertionOptions
 
     public int MaxCompactedToolResultChars { get; init; } = 3000;
 
-    public int MaxCompactedStateChars { get; init; } = 12_000;
-
-    public Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>>? ConversationCompactor { get; init; }
+    public int MaxCompactedStateChars { get; init; } = 16_000;
 
     public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(2);
 

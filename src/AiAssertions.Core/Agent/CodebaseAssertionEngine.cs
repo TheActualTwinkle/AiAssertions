@@ -17,13 +17,14 @@ internal sealed class CodebaseAssertionEngine
                                                 You cannot access the filesystem directly. Use only the provided tools.
                                                 The user message includes execution_context.codebase_root. Use that root for tool calls.
                                                 Do not guess when evidence can be gathered.
-                                                If the conversation contains a compacted assertion state, treat it as previously gathered tool evidence.
+                                                If the conversation contains a compacted assertion checkpoint or state, treat it as previously gathered tool evidence.
+                                                Do not repeat exact completed calls recorded in its coverage ledger. If a missing detail is genuinely required, prefer a narrower targeted search or read only the missing range.
 
                                                 Analyze all pre-included evidence before calling tools.
                                                 First identify the logical shape of the requirement.
                                                 For universal requirements such as all, every, always, never, only, or must, one concrete counterexample is sufficient for a failed verdict. Return that verdict immediately when the counterexample is conclusive.
                                                 For existential, aggregate, threshold, or completeness requirements, do not infer a failed verdict from one non-matching example. Gather enough evidence for the requirement's actual quantifier.
-                                                Search tool responses are paginated. For exhaustive or universal passing verdicts, continue with next_offset while has_more is true. Never treat one page as the complete result set.
+                                                Search and file-read responses are paginated. For exhaustive or universal passing verdicts, continue with next_offset or next_start_line while has_more is true. Never treat one page as the complete result set.
                                                 Stop gathering evidence as soon as the verdict is logically conclusive, but not before.
                                                 Never claim that runtime behavior was verified unless a tool actually executed it or concrete code evidence proves it. Distinguish static evidence from executed behavior.
                                                 Do not call list_projects or search_files when the relevant files are already present in pre-included evidence.
@@ -127,18 +128,24 @@ internal sealed class CodebaseAssertionEngine
                 Content = userMessage
             }
         };
+        var conversationCheckpoint = new CodebaseConversationCheckpoint();
 
         for (var step = 0; step < _options.MaxToolIterations; step++)
         {
-            var requestMessages = CodebaseConversationCompactor.BuildRequestMessages(
-                messages,
-                _options.ConversationCompactor,
-                _options.ConversationCompactionEnabled,
-                _options.RecentToolCallTurns,
-                _options.MaxCompactedToolResultChars,
-                _options.MaxCompactedStateChars,
-                _options.MaxRequestTokens,
-                _options.RequestTokenEstimator);
+            var requestMessages = await CodebaseConversationCompactor
+                .BuildRequestMessagesAsync(
+                    messages,
+                    _client,
+                    conversationCheckpoint,
+                    _options.ConversationCompactionEnabled,
+                    _options.RecentToolCallTurns,
+                    _options.MaxCompactedToolResultChars,
+                    _options.MaxCompactedStateChars,
+                    _options.MaxRequestTokens,
+                    _options.RequestTokenEstimator,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            conversationCheckpoint.PruneCompactedPrefix(messages);
 
             var response = await _client
                 .GetToolResponseAsync(
@@ -171,7 +178,7 @@ internal sealed class CodebaseAssertionEngine
             messages.Add(new AiChatMessage
             {
                 Role = "assistant",
-                Content = string.Empty,
+                Content = response.Content ?? string.Empty,
                 ToolCalls = response.ToolCalls
             });
 

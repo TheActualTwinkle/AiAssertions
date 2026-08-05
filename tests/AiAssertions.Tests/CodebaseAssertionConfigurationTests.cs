@@ -1,7 +1,6 @@
 using AiAssertions.Core.Abstractions;
 using AiAssertions.Core.Models;
 using FluentAssertions;
-using System.Text.Json;
 using Xunit;
 
 namespace AiAssertions.Tests;
@@ -37,7 +36,7 @@ public sealed class CodebaseAssertionConfigurationTests
     }
 
     [Fact]
-    public async Task CodebaseAssertion_WhenConversationCompactionUsesDefaults_ShouldCompactOldToolCallsAndKeepRecentTurns()
+    public async Task CodebaseAssertion_WhenDefaultHistoryIsSmall_ShouldNotCompactPrematurely()
     {
         var client = new RecordingToolCallingClient(
             ToolCallResponse("call-1"),
@@ -48,143 +47,119 @@ public sealed class CodebaseAssertionConfigurationTests
         await CreateAssertion(client).That("requirement");
 
         var finalMessages = client.Requests[^1].Messages;
-        finalMessages.Should().HaveCount(7);
+        finalMessages.Should().HaveCount(8);
 
         finalMessages.Select(message => message.Role).Should()
-            .Equal("system", "user", "user", "assistant", "tool", "assistant", "tool");
-
-        var compactedState = ParseCompactedState(finalMessages[2].Content);
-        var completedToolCalls = compactedState.RootElement.GetProperty("completed_tool_calls");
-
-        completedToolCalls.GetArrayLength().Should().Be(1);
-
-        var completedToolCall = completedToolCalls[0];
-        completedToolCall.GetProperty("tool").GetString().Should().Be("list_projects");
-        completedToolCall.GetProperty("arguments").ValueKind.Should().Be(JsonValueKind.Object);
-        completedToolCall.GetProperty("arguments").EnumerateObject().Should().BeEmpty();
-
-        var resultSummary = completedToolCall.GetProperty("result_summary").GetString();
-        resultSummary.Should().NotBeNullOrWhiteSpace();
-
-        using var result = JsonDocument.Parse(resultSummary);
-        result.RootElement.GetProperty("projects").EnumerateArray()
-            .Select(project => project.GetString())
-            .Should().Contain("src/AiAssertions.Core/AiAssertions.Core.csproj");
+            .Equal("system", "user", "assistant", "tool", "assistant", "tool", "assistant", "tool");
 
         finalMessages.SelectMany(message => message.ToolCalls ?? []).Select(call => call.Id)
-            .Should().Equal("call-2", "call-3");
+            .Should().Equal("call-1", "call-2", "call-3");
     }
 
     [Fact]
-    public async Task CodebaseAssertion_WhenCustomCompactorIsConfigured_ShouldReceiveFullAccumulatedConversation()
-    {
-        var client = new RecordingToolCallingClient(
-            ToolCallResponse("call-1"),
-            VerdictResponse());
-
-        var receivedHistories = new List<AiChatMessage[]>();
-
-        await CreateAssertion(client)
-            .WithConversationCompactor(messages =>
-            {
-                receivedHistories.Add(messages.ToArray());
-
-                return messages;
-            })
-            .That("requirement");
-
-        receivedHistories.Should().HaveCount(2);
-        receivedHistories[0].Select(message => message.Role).Should().Equal("system", "user");
-        receivedHistories[1].Select(message => message.Role).Should().Equal("system", "user", "assistant", "tool");
-        receivedHistories[1][2].ToolCalls.Should().ContainSingle(call => call.Id == "call-1");
-        client.Requests[1].Messages.Should().Equal(receivedHistories[1]);
-    }
-
-    [Fact]
-    public async Task CodebaseAssertion_WhenCustomCompactorIsDisabled_ShouldStopCallingCustomCompactor()
+    public async Task CodebaseAssertion_WhenConversationCompactionIsConfiguredAfterDisabling_ShouldExecute()
     {
         var client = new RecordingToolCallingClient(VerdictResponse());
-        var calls = 0;
-
-        await CreateAssertion(client)
-            .WithConversationCompactor(messages =>
-            {
-                calls++;
-
-                return messages;
-            })
-            .WithoutConversationCompaction()
-            .That("requirement");
-
-        calls.Should().Be(0);
-    }
-
-    [Fact]
-    public async Task CodebaseAssertion_WhenCustomCompactorIsConfiguredAfterDisablingCompaction_ShouldUseCustomCompactor()
-    {
-        var client = new RecordingToolCallingClient(VerdictResponse());
-        var calls = 0;
 
         await CreateAssertion(client)
             .WithoutConversationCompaction()
-            .WithConversationCompactor(messages =>
+            .WithConversationCompaction(new ConversationCompactionOptions
             {
-                calls++;
-
-                return messages;
+                RecentToolCallTurns = 1,
+                MaxCheckpointChars = 8192
             })
             .That("requirement");
 
-        calls.Should().Be(1);
+        client.Requests.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task CodebaseAssertion_WhenCompactionLimitsAreConfiguredAfterCustomCompactor_ShouldUseDefaultCompactor()
+    public void CodebaseAssertion_WhenConversationCompactionOptionsAreNull_ShouldThrow()
     {
         var client = new RecordingToolCallingClient(VerdictResponse());
-        var customCompactorCalls = 0;
 
-        await CreateAssertion(client)
-            .WithConversationCompactor(messages =>
-            {
-                customCompactorCalls++;
-                return messages;
-            })
-            .WithConversationCompactionLimits(1, 2048, 8192)
-            .That("requirement");
+        var act = () => CreateAssertion(client).WithConversationCompaction(null!);
 
-        customCompactorCalls.Should().Be(0);
+        act.Should().Throw<ArgumentNullException>().WithParameterName("options");
+    }
+
+    [Theory]
+    [InlineData(0, 1, nameof(ConversationCompactionOptions.RecentToolCallTurns))]
+    [InlineData(1, 0, nameof(ConversationCompactionOptions.MaxCheckpointChars))]
+    public void CodebaseAssertion_WhenConversationCompactionOptionIsNotPositive_ShouldThrow(
+        int recentToolCallTurns,
+        int maxCheckpointChars,
+        string parameterName)
+    {
+        var client = new RecordingToolCallingClient(VerdictResponse());
+        var options = new ConversationCompactionOptions
+        {
+            RecentToolCallTurns = recentToolCallTurns,
+            MaxCheckpointChars = maxCheckpointChars
+        };
+
+        var act = () => CreateAssertion(client).WithConversationCompaction(options);
+
+        act.Should().Throw<ArgumentOutOfRangeException>().WithParameterName(parameterName);
     }
 
     [Fact]
-    public async Task CodebaseAssertion_WhenCustomCompactorAndTokenLimitAreConfigured_ShouldCompactBeforeApplyingTokenLimitAndRespectBudget()
+    public async Task CodebaseAssertion_WhenTokenLimitAndEstimatorAreConfiguredTogether_ShouldUseEstimator()
     {
         var client = new RecordingToolCallingClient(VerdictResponse());
-        var calls = 0;
-        var oldLargeMessage = Message("assistant", "old-message-that-does-not-fit");
-        var newestMessage = Message("assistant", "new");
-        const int maxTokens = 103;
+        var estimatorCalls = 0;
 
         await CreateAssertion(client)
-            .WithConversationCompactor(messages =>
+            .WithApproximateTokenLimit(4096, messages =>
             {
-                calls++;
-
-                return [messages[0], messages[1], oldLargeMessage, newestMessage];
+                estimatorCalls++;
+                return messages.Sum(message => message.Content.Length);
             })
-            .WithApproximateTokenLimit(maxTokens)
-            .WithTokenEstimator(EstimateTokens)
             .That("requirement");
 
-        calls.Should().Be(1);
-        client.Requests[0].Messages.Should().Contain(newestMessage);
-        client.Requests[0].Messages.Should().NotContain(oldLargeMessage);
-        EstimateTokens(client.Requests[0].Messages).Should().BeLessThanOrEqualTo(maxTokens);
+        estimatorCalls.Should().BeGreaterThan(0);
+    }
 
-        return;
+    [Fact]
+    public async Task CodebaseAssertion_WhenOnlyTokenLimitIsChanged_ShouldPreserveGlobalEstimator()
+    {
+        var client = new RecordingToolCallingClient(VerdictResponse());
+        var estimatorCalls = 0;
+        var defaults = new AiAssertDefaults
+        {
+            RequestTokenEstimator = messages =>
+            {
+                estimatorCalls++;
+                return messages.Count;
+            }
+        };
 
-        int EstimateTokens(IReadOnlyList<AiChatMessage> messages) =>
-            100 + messages.Sum(message => ReferenceEquals(message, oldLargeMessage) ? 10_000 : 1);
+        await CreateAssertion(client, defaults)
+            .WithApproximateTokenLimit(4096)
+            .That("requirement");
+
+        estimatorCalls.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task CodebaseAssertion_WhenEstimatorIsExplicitlyNull_ShouldUseBuiltInEstimator()
+    {
+        var client = new RecordingToolCallingClient(VerdictResponse());
+        var estimatorCalls = 0;
+        var defaults = new AiAssertDefaults
+        {
+            RequestTokenEstimator = messages =>
+            {
+                estimatorCalls++;
+                return messages.Count;
+            }
+        };
+
+        await CreateAssertion(client, defaults)
+            .WithApproximateTokenLimit(4096, null)
+            .That("requirement");
+
+        estimatorCalls.Should().Be(0);
     }
 
     [Fact]
@@ -205,37 +180,24 @@ public sealed class CodebaseAssertionConfigurationTests
     }
 
     [Fact]
-    public async Task CodebaseAssertion_WhenGlobalTokenAndCompactorDefaultsAreConfigured_ShouldApplyThem()
+    public async Task CodebaseAssertion_WhenGlobalTokenDefaultsAreConfigured_ShouldApplyThem()
     {
         var client = new RecordingToolCallingClient(VerdictResponse());
-        var oldLargeMessage = Message("assistant", "old-message-that-does-not-fit");
-        var newestMessage = Message("assistant", "new");
-        var compactorCalls = 0;
-        const int maxTokens = 103;
+        var estimatorCalls = 0;
 
         var defaults = new AiAssertDefaults
         {
-            MaxRequestTokens = maxTokens,
-            RequestTokenEstimator = EstimateTokens,
-            ConversationCompactor = messages =>
+            MaxRequestTokens = 4096,
+            RequestTokenEstimator = messages =>
             {
-                compactorCalls++;
-
-                return [messages[0], messages[1], oldLargeMessage, newestMessage];
+                estimatorCalls++;
+                return messages.Sum(message => message.Content.Length);
             }
         };
 
         await CreateAssertion(client, defaults).That("requirement");
 
-        compactorCalls.Should().Be(1);
-        client.Requests[0].Messages.Should().Contain(newestMessage);
-        client.Requests[0].Messages.Should().NotContain(oldLargeMessage);
-        EstimateTokens(client.Requests[0].Messages).Should().BeLessThanOrEqualTo(maxTokens);
-
-        return;
-
-        int EstimateTokens(IReadOnlyList<AiChatMessage> messages) =>
-            100 + messages.Sum(message => ReferenceEquals(message, oldLargeMessage) ? 10_000 : 1);
+        estimatorCalls.Should().BeGreaterThan(0);
     }
 
     private static CodebaseAssertion CreateAssertion(
@@ -264,45 +226,4 @@ public sealed class CodebaseAssertionConfigurationTests
             Content = Verdict,
             ToolCalls = []
         };
-
-    private static AiChatMessage Message(string role, string content) =>
-        new()
-        {
-            Role = role,
-            Content = content
-        };
-
-    private static JsonDocument ParseCompactedState(string content)
-    {
-        const string jsonFence = "```json";
-        var jsonStart = content.IndexOf(jsonFence, StringComparison.Ordinal);
-        jsonStart.Should().BeGreaterThanOrEqualTo(0);
-        jsonStart += jsonFence.Length;
-
-        var jsonEnd = content.IndexOf("```", jsonStart, StringComparison.Ordinal);
-        jsonEnd.Should().BeGreaterThan(jsonStart);
-
-        return JsonDocument.Parse(content[jsonStart..jsonEnd]);
-    }
-
-    private sealed class RecordingToolCallingClient(params AiToolResponse[] responses) : IToolCallingClient
-    {
-        private readonly Queue<AiToolResponse> _responses = new(responses);
-
-        internal List<AiToolRequest> Requests { get; } = [];
-
-        public Task<AiToolResponse> GetToolResponseAsync(
-            AiToolRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            Requests.Add(request);
-
-            return Task.FromResult(_responses.Dequeue());
-        }
-
-        public Task<AiTextResponse> GetResponseAsync(
-            AiTextRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-    }
 }

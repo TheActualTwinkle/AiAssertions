@@ -11,18 +11,18 @@ public sealed class AiAssertConfigurationTests
     {
         var (configuration, getDefaults) = CreateConfiguration();
         Func<IReadOnlyList<AiChatMessage>, int> tokenEstimator = messages => messages.Count;
-        Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>> conversationCompactor =
-            messages => messages;
 
         var result = configuration
-            .WithGlobalApproximateTokenLimit(4096)
-            .WithGlobalTokenEstimator(tokenEstimator)
+            .WithGlobalApproximateTokenLimit(4096, tokenEstimator)
             .WithGlobalSystemPrompt("system prompt")
             .WithGlobalAdditionalSystemPrompt("first")
             .WithGlobalAdditionalSystemPrompt("second")
             .WithoutGlobalConversationCompaction()
-            .WithGlobalConversationCompactor(conversationCompactor)
-            .WithGlobalConversationCompactionLimits(1, 2048, 8192);
+            .WithGlobalConversationCompaction(new ConversationCompactionOptions
+            {
+                RecentToolCallTurns = 1,
+                MaxCheckpointChars = 8192
+            });
 
         var defaults = getDefaults();
         var separator = Environment.NewLine + Environment.NewLine;
@@ -33,40 +33,33 @@ public sealed class AiAssertConfigurationTests
         defaults.SystemPrompt.Should().Be("system prompt");
         defaults.AdditionalSystemPrompt.Should().Be($"first{separator}second");
         defaults.ConversationCompactionEnabled.Should().BeTrue();
-        defaults.ConversationCompactor.Should().BeNull();
         defaults.RecentToolCallTurns.Should().Be(1);
-        defaults.MaxCompactedToolResultChars.Should().Be(2048);
         defaults.MaxCompactedStateChars.Should().Be(8192);
     }
 
     [Fact]
-    public void WithoutGlobalConversationCompaction_WhenCustomCompactorIsConfigured_ShouldClearIt()
+    public void WithoutGlobalConversationCompaction_ShouldDisableCompaction()
     {
         var (configuration, getDefaults) = CreateConfiguration();
 
-        configuration
-            .WithGlobalConversationCompactor(messages => messages)
-            .WithoutGlobalConversationCompaction();
+        configuration.WithoutGlobalConversationCompaction();
 
         var defaults = getDefaults();
 
         defaults.ConversationCompactionEnabled.Should().BeFalse();
-        defaults.ConversationCompactor.Should().BeNull();
     }
 
     [Fact]
-    public void WithGlobalConversationCompactor_WhenConfiguredAfterLimits_ShouldReplaceDefaultCompactor()
+    public void WithGlobalConversationCompaction_WhenConfiguredAfterDisabling_ShouldEnableCompaction()
     {
         var (configuration, getDefaults) = CreateConfiguration();
-        Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>> customCompactor = messages => messages;
 
         configuration
-            .WithGlobalConversationCompactionLimits(1, 2048, 8192)
-            .WithGlobalConversationCompactor(customCompactor);
+            .WithoutGlobalConversationCompaction()
+            .WithGlobalConversationCompaction(new ConversationCompactionOptions());
 
         var defaults = getDefaults();
         defaults.ConversationCompactionEnabled.Should().BeTrue();
-        defaults.ConversationCompactor.Should().BeSameAs(customCompactor);
     }
 
     [Theory]
@@ -83,38 +76,59 @@ public sealed class AiAssertConfigurationTests
     }
 
     [Fact]
-    public void GlobalDelegateConfigurationMethods_WhenValueIsNull_ShouldThrow()
+    public void WithGlobalApproximateTokenLimit_WhenEstimatorIsExplicitlyNull_ShouldUseBuiltInEstimator()
+    {
+        var (configuration, getDefaults) = CreateConfiguration();
+
+        configuration.WithGlobalApproximateTokenLimit(4096, messages => messages.Count);
+        configuration.WithGlobalApproximateTokenLimit(2048, null);
+
+        getDefaults().MaxRequestTokens.Should().Be(2048);
+        getDefaults().RequestTokenEstimator.Should().BeNull();
+    }
+
+    [Fact]
+    public void WithGlobalApproximateTokenLimit_WhenOnlyLimitIsChanged_ShouldPreserveEstimator()
+    {
+        var (configuration, getDefaults) = CreateConfiguration();
+        Func<IReadOnlyList<AiChatMessage>, int> estimator = messages => messages.Count;
+
+        configuration.WithGlobalApproximateTokenLimit(4096, estimator);
+        configuration.WithGlobalApproximateTokenLimit(2048);
+
+        getDefaults().MaxRequestTokens.Should().Be(2048);
+        getDefaults().RequestTokenEstimator.Should().BeSameAs(estimator);
+    }
+
+    [Fact]
+    public void WithGlobalConversationCompaction_WhenOptionsAreNull_ShouldThrow()
     {
         var (configuration, _) = CreateConfiguration();
 
-        var tokenEstimator = () => configuration.WithGlobalTokenEstimator(null!);
-        var conversationCompactor = () => configuration.WithGlobalConversationCompactor(null!);
+        var act = () => configuration.WithGlobalConversationCompaction(null!);
 
-        tokenEstimator.Should().Throw<ArgumentNullException>()
-            .WithParameterName("tokenEstimator");
-        conversationCompactor.Should().Throw<ArgumentNullException>()
-            .WithParameterName("conversationCompactor");
+        act.Should().Throw<ArgumentNullException>()
+            .WithParameterName("options");
     }
 
     [Theory]
-    [InlineData(0, 1, 1, "recentToolCallTurns")]
-    [InlineData(1, 0, 1, "maxToolResultChars")]
-    [InlineData(1, 1, 0, "maxCompactedStateChars")]
-    public void WithGlobalConversationCompactionLimits_WhenValueIsNotPositive_ShouldThrow(
+    [InlineData(0, 1, nameof(ConversationCompactionOptions.RecentToolCallTurns))]
+    [InlineData(1, 0, nameof(ConversationCompactionOptions.MaxCheckpointChars))]
+    public void WithGlobalConversationCompaction_WhenOptionIsNotPositive_ShouldThrow(
         int recentToolCallTurns,
-        int maxToolResultChars,
-        int maxCompactedStateChars,
+        int maxCheckpointChars,
         string parameterName)
     {
         var (configuration, _) = CreateConfiguration();
+        var options = new ConversationCompactionOptions
+        {
+            RecentToolCallTurns = recentToolCallTurns,
+            MaxCheckpointChars = maxCheckpointChars
+        };
 
-        var act = () => configuration.WithGlobalConversationCompactionLimits(
-            recentToolCallTurns,
-            maxToolResultChars,
-            maxCompactedStateChars);
+        var act = () => configuration.WithGlobalConversationCompaction(options);
 
-        act.Should().Throw<ArgumentOutOfRangeException>()
-            .WithParameterName(parameterName);
+        act.Should().Throw<ArgumentOutOfRangeException>().WithParameterName(parameterName);
     }
 
     [Theory]

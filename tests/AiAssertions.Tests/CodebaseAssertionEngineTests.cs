@@ -14,7 +14,7 @@ public sealed class CodebaseAssertionEngineTests
     [Fact]
     public async Task EvaluateAsync_WhenToolCallIsRepeatedWithReorderedArguments_ShouldUseCachedResult()
     {
-        using var directory = new TemporaryDirectory();
+        using var directory = new EngineTestTemporaryDirectory();
         var tool = new CountingTool();
         var client = new RecordingClient(
             ToolResponse("call-1", """{"second":2,"first":1}"""),
@@ -37,7 +37,7 @@ public sealed class CodebaseAssertionEngineTests
     [Fact]
     public async Task EvaluateAsync_WhenToolFails_ShouldRetryInsteadOfCachingError()
     {
-        using var directory = new TemporaryDirectory();
+        using var directory = new EngineTestTemporaryDirectory();
         var tool = new FailingOnceTool();
         var client = new RecordingClient(
             ToolResponse("call-1", "{}"),
@@ -61,7 +61,7 @@ public sealed class CodebaseAssertionEngineTests
     [Fact]
     public async Task EvaluateAsync_WhenClientIgnoresCancellation_ShouldStillReturnAtTimeout()
     {
-        using var directory = new TemporaryDirectory();
+        using var directory = new EngineTestTemporaryDirectory();
         var engine = new CodebaseAssertionEngine(
             new HangingClient(),
             options: new CodebaseAssertionOptions
@@ -82,7 +82,7 @@ public sealed class CodebaseAssertionEngineTests
     [Fact]
     public async Task EvaluateAsync_WhenToolIgnoresCancellation_ShouldStillReturnAtTimeout()
     {
-        using var directory = new TemporaryDirectory();
+        using var directory = new EngineTestTemporaryDirectory();
         var client = new RecordingClient(ToolResponse("call-1", "{}"));
         var engine = new CodebaseAssertionEngine(
             client,
@@ -105,7 +105,7 @@ public sealed class CodebaseAssertionEngineTests
     [Fact]
     public async Task EvaluateAsync_ShouldTellModelToUseIncludedEvidenceAndStopAtFirstCounterexample()
     {
-        using var directory = new TemporaryDirectory();
+        using var directory = new EngineTestTemporaryDirectory();
         var client = new RecordingClient(VerdictResponse());
         var engine = new CodebaseAssertionEngine(
             client,
@@ -117,7 +117,8 @@ public sealed class CodebaseAssertionEngineTests
         prompt.Should().Contain("Analyze all pre-included evidence before calling tools.");
         prompt.Should().Contain("For universal requirements");
         prompt.Should().Contain("For existential, aggregate, threshold, or completeness requirements");
-        prompt.Should().Contain("continue with next_offset while has_more is true");
+        prompt.Should().Contain("continue with next_offset or next_start_line while has_more is true");
+        prompt.Should().Contain("Do not repeat exact completed calls recorded in its coverage ledger");
         prompt.Should().Contain("no more than 4");
     }
 
@@ -143,107 +144,4 @@ public sealed class CodebaseAssertionEngineTests
             ToolCalls = []
         };
 
-    private sealed class CountingTool : IAiTool
-    {
-        public string Name => "counting";
-
-        public string Description => "Counts executions.";
-
-        public string ParametersJsonSchema => """{"type":"object"}""";
-
-        internal int Executions { get; private set; }
-
-        public ValueTask<string> ExecuteAsync(
-            string argumentsJson,
-            ToolExecutionContext context,
-            CancellationToken cancellationToken = default)
-        {
-            Executions++;
-            return ValueTask.FromResult("""{"value":1}""");
-        }
-    }
-
-    private sealed class HangingTool : IAiTool
-    {
-        public string Name => "counting";
-
-        public string Description => "Never completes.";
-
-        public string ParametersJsonSchema => """{"type":"object"}""";
-
-        public ValueTask<string> ExecuteAsync(
-            string argumentsJson,
-            ToolExecutionContext context,
-            CancellationToken cancellationToken = default) =>
-            new(new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously).Task);
-    }
-
-    private sealed class FailingOnceTool : IAiTool
-    {
-        public string Name => "counting";
-
-        public string Description => "Fails once.";
-
-        public string ParametersJsonSchema => """{"type":"object"}""";
-
-        internal int Executions { get; private set; }
-
-        public ValueTask<string> ExecuteAsync(
-            string argumentsJson,
-            ToolExecutionContext context,
-            CancellationToken cancellationToken = default)
-        {
-            Executions++;
-            return Executions == 1
-                ? throw new InvalidOperationException("Transient failure.")
-                : ValueTask.FromResult("""{"value":1}""");
-        }
-    }
-
-    private sealed class RecordingClient(params AiToolResponse[] responses) : IToolCallingClient
-    {
-        private readonly Queue<AiToolResponse> _responses = new(responses);
-
-        internal List<AiToolRequest> Requests { get; } = [];
-
-        public Task<AiToolResponse> GetToolResponseAsync(
-            AiToolRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            Requests.Add(request);
-            return Task.FromResult(_responses.Dequeue());
-        }
-
-        public Task<AiTextResponse> GetResponseAsync(
-            AiTextRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-    }
-
-    private sealed class HangingClient : IToolCallingClient
-    {
-        public Task<AiToolResponse> GetToolResponseAsync(
-            AiToolRequest request,
-            CancellationToken cancellationToken = default) =>
-            new TaskCompletionSource<AiToolResponse>(TaskCreationOptions.RunContinuationsAsynchronously).Task;
-
-        public Task<AiTextResponse> GetResponseAsync(
-            AiTextRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-    }
-
-    private sealed class TemporaryDirectory : IDisposable
-    {
-        internal TemporaryDirectory()
-        {
-            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"AiAssertions.Tests-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(Path);
-        }
-
-        internal string Path { get; }
-
-        public void Dispose() =>
-            Directory.Delete(Path, recursive: true);
-    }
 }
