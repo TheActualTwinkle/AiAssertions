@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AiAssertions.Core.Abstractions;
 using AiAssertions.Core.Assertions;
 using AiAssertions.Core.Models;
@@ -18,8 +19,17 @@ internal sealed class CodebaseAssertionEngine
                                                 Do not guess when evidence can be gathered.
                                                 If the conversation contains a compacted assertion state, treat it as previously gathered tool evidence.
 
-                                                Batch independent tool calls aggressively.
-                                                If you know several files, names, or searches that are all needed, request all of those tool calls in the same assistant turn.
+                                                Analyze all pre-included evidence before calling tools.
+                                                First identify the logical shape of the requirement.
+                                                For universal requirements such as all, every, always, never, only, or must, one concrete counterexample is sufficient for a failed verdict. Return that verdict immediately when the counterexample is conclusive.
+                                                For existential, aggregate, threshold, or completeness requirements, do not infer a failed verdict from one non-matching example. Gather enough evidence for the requirement's actual quantifier.
+                                                Search tool responses are paginated. For exhaustive or universal passing verdicts, continue with next_offset while has_more is true. Never treat one page as the complete result set.
+                                                Stop gathering evidence as soon as the verdict is logically conclusive, but not before.
+                                                Never claim that runtime behavior was verified unless a tool actually executed it or concrete code evidence proves it. Distinguish static evidence from executed behavior.
+                                                Do not call list_projects or search_files when the relevant files are already present in pre-included evidence.
+
+                                                Batch up to 4 independent tool calls when necessary.
+                                                If you know several files, names, or searches that are all needed, request no more than 4 of those tool calls in the same assistant turn.
                                                 Prefer one broad discovery turn followed by one batched evidence-reading turn over many single-tool turns.
                                                 Do not wait for read_file("A.cs") before requesting read_file("B.cs") when both files are already known.
 
@@ -72,7 +82,7 @@ internal sealed class CodebaseAssertionEngine
         ArgumentException.ThrowIfNullOrWhiteSpace(requirement);
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        
+
         if (_options.Timeout > TimeSpan.Zero)
             timeoutCts.CancelAfter(_options.Timeout);
 
@@ -80,7 +90,10 @@ internal sealed class CodebaseAssertionEngine
         {
             return await EvaluateCoreAsync(requirement, timeoutCts.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (
+            !cancellationToken.IsCancellationRequested
+            && _options.Timeout > TimeSpan.Zero
+            && timeoutCts.IsCancellationRequested)
         {
             return new AiAssertionResult
             {
@@ -97,10 +110,10 @@ internal sealed class CodebaseAssertionEngine
     private async Task<AiAssertionResult> EvaluateCoreAsync(string requirement, CancellationToken cancellationToken)
     {
         var workingDirectory = _options.WorkingDirectory ?? Directory.GetCurrentDirectory();
-        var context = new ToolExecutionContext(workingDirectory);
-        var codebaseRoot = PathSafety.DiscoverRoot(context.WorkingDirectory);
+        var codebaseRoot = PathSafety.DiscoverRoot(workingDirectory);
+        var context = new ToolExecutionContext(workingDirectory, codebaseRoot);
         var userMessage = await BuildUserMessageAsync(requirement, codebaseRoot, cancellationToken).ConfigureAwait(false);
-        
+
         var messages = new List<AiChatMessage>
         {
             new()
@@ -123,6 +136,7 @@ internal sealed class CodebaseAssertionEngine
                 _options.ConversationCompactionEnabled,
                 _options.RecentToolCallTurns,
                 _options.MaxCompactedToolResultChars,
+                _options.MaxCompactedStateChars,
                 _options.MaxRequestTokens,
                 _options.RequestTokenEstimator);
 
@@ -133,6 +147,7 @@ internal sealed class CodebaseAssertionEngine
                         Messages = requestMessages,
                         Tools = _toolDefinitions
                     }, cancellationToken)
+                .WaitAsync(cancellationToken)
                 .ConfigureAwait(false);
 
             if (response.ToolCalls.Count == 0)
@@ -168,7 +183,7 @@ internal sealed class CodebaseAssertionEngine
         }
 
         var transcript = new StringBuilder();
-        
+
         foreach (var message in messages.TakeLast(8))
         {
             transcript.AppendLine(message.Role);
@@ -205,7 +220,7 @@ internal sealed class CodebaseAssertionEngine
     private async Task<string> BuildUserMessageAsync(string requirement, string codebaseRoot, CancellationToken cancellationToken)
     {
         var builder = new StringBuilder();
-        
+
         builder.AppendLine("Requirement:");
         builder.AppendLine(requirement.Trim());
         builder.AppendLine();
@@ -229,19 +244,19 @@ internal sealed class CodebaseAssertionEngine
     private async Task<string> ReadIncludedEvidenceAsync(string codebaseRoot, CancellationToken cancellationToken)
     {
         var files = ResolveIncludedFiles(codebaseRoot).Take(20).ToArray();
-        
+
         if (files.Length == 0)
             return string.Empty;
 
         var root = codebaseRoot;
         var builder = new StringBuilder();
-        
+
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            
+
             var text = await File.ReadAllTextAsync(file, cancellationToken).ConfigureAwait(false);
-            
+
             if (text.Length > 30_000)
                 text = text[..30_000];
 
@@ -328,7 +343,11 @@ internal sealed class CodebaseAssertionEngine
     {
         try
         {
-            return await tool.ExecuteAsync(argumentsJson, context, cancellationToken).ConfigureAwait(false);
+            return await tool
+                .ExecuteAsync(argumentsJson, context, cancellationToken)
+                .AsTask()
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -341,9 +360,27 @@ internal sealed class CodebaseAssertionEngine
         ToolExecutionContext context,
         CancellationToken cancellationToken)
     {
-        var content = _toolsByName.TryGetValue(call.Name, out var tool)
-            ? await ExecuteToolAsync(tool, call.ArgumentsJson, context, cancellationToken).ConfigureAwait(false)
-            : JsonSerializer.Serialize(new { error = $"Unknown tool '{call.Name}'." }, AssertionJson.Options);
+        string content;
+
+        if (_toolsByName.TryGetValue(call.Name, out var tool))
+        {
+            var cacheKey = CreateToolCacheKey(call);
+            var cachedResult = await context
+                .GetOrAddToolResultAsync(
+                    cacheKey,
+                    () => ExecuteToolAsync(tool, call.ArgumentsJson, context, cancellationToken),
+                    IsSuccessfulToolResult)
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            content = cachedResult.CacheHit
+                ? MarkToolResultAsCached(cachedResult.Content)
+                : cachedResult.Content;
+        }
+        else
+        {
+            content = JsonSerializer.Serialize(new { error = $"Unknown tool '{call.Name}'." }, AssertionJson.Options);
+        }
 
         return new AiChatMessage
         {
@@ -352,5 +389,96 @@ internal sealed class CodebaseAssertionEngine
             Name = call.Name,
             ToolCallId = call.Id
         };
+    }
+
+    private static string CreateToolCacheKey(AiToolCall call) =>
+        string.Concat(call.Name, "\n", CanonicalizeJson(call.ArgumentsJson));
+
+    private static bool IsSuccessfulToolResult(string content)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(content);
+            return document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("error", out _);
+        }
+        catch (JsonException)
+        {
+            return true;
+        }
+    }
+
+    private static string CanonicalizeJson(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var builder = new StringBuilder();
+            WriteCanonicalJson(document.RootElement, builder);
+            return builder.ToString();
+        }
+        catch (JsonException)
+        {
+            return json.Trim();
+        }
+    }
+
+    private static void WriteCanonicalJson(JsonElement element, StringBuilder builder)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                builder.Append('{');
+                var firstProperty = true;
+                foreach (var property in element.EnumerateObject().OrderBy(property => property.Name, StringComparer.Ordinal))
+                {
+                    if (!firstProperty)
+                        builder.Append(',');
+
+                    firstProperty = false;
+                    builder.Append(JsonSerializer.Serialize(property.Name, AssertionJson.Options));
+                    builder.Append(':');
+                    WriteCanonicalJson(property.Value, builder);
+                }
+
+                builder.Append('}');
+                break;
+            case JsonValueKind.Array:
+                builder.Append('[');
+                var firstItem = true;
+                foreach (var item in element.EnumerateArray())
+                {
+                    if (!firstItem)
+                        builder.Append(',');
+
+                    firstItem = false;
+                    WriteCanonicalJson(item, builder);
+                }
+
+                builder.Append(']');
+                break;
+            default:
+                builder.Append(element.GetRawText());
+                break;
+        }
+    }
+
+    private static string MarkToolResultAsCached(string content)
+    {
+        try
+        {
+            var node = JsonNode.Parse(content);
+            if (node is JsonObject result)
+            {
+                result["cached"] = true;
+                return result.ToJsonString(AssertionJson.Options);
+            }
+
+            return JsonSerializer.Serialize(new { cached = true, result = node }, AssertionJson.Options);
+        }
+        catch (JsonException)
+        {
+            return JsonSerializer.Serialize(new { cached = true, result = content }, AssertionJson.Options);
+        }
     }
 }

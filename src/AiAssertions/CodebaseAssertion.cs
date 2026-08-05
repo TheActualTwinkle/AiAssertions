@@ -21,6 +21,7 @@ public sealed class CodebaseAssertion
     private readonly bool _conversationCompactionEnabled;
     private readonly int _recentToolCallTurns;
     private readonly int _maxCompactedToolResultChars;
+    private readonly int _maxCompactedStateChars;
     private readonly Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>>? _conversationCompactor;
     private readonly double _minimumFalseConfidence;
     private readonly double _minimumTrueConfidence;
@@ -40,6 +41,7 @@ public sealed class CodebaseAssertion
             defaults.ConversationCompactionEnabled,
             defaults.RecentToolCallTurns,
             defaults.MaxCompactedToolResultChars,
+            defaults.MaxCompactedStateChars,
             defaults.ConversationCompactor,
             defaults.MinimumTrueConfidence,
             defaults.MinimumFalseConfidence)
@@ -59,6 +61,7 @@ public sealed class CodebaseAssertion
         bool conversationCompactionEnabled,
         int recentToolCallTurns,
         int maxCompactedToolResultChars,
+        int maxCompactedStateChars,
         Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>>? conversationCompactor,
         double minimumTrueConfidence,
         double minimumFalseConfidence)
@@ -75,6 +78,7 @@ public sealed class CodebaseAssertion
         _conversationCompactionEnabled = conversationCompactionEnabled;
         _recentToolCallTurns = recentToolCallTurns;
         _maxCompactedToolResultChars = maxCompactedToolResultChars;
+        _maxCompactedStateChars = maxCompactedStateChars;
         _conversationCompactor = conversationCompactor;
         _minimumTrueConfidence = minimumTrueConfidence;
         _minimumFalseConfidence = minimumFalseConfidence;
@@ -200,6 +204,37 @@ public sealed class CodebaseAssertion
     }
 
     /// <summary>
+    /// Configures the bounded default conversation compactor.
+    /// </summary>
+    /// <remarks>
+    /// Calling this method after <see cref="WithConversationCompactor(Func{IReadOnlyList{AiChatMessage}, IReadOnlyList{AiChatMessage}})"/>
+    /// removes the custom compactor. A custom compactor configured later replaces the bounded default compactor.
+    /// </remarks>
+    /// <param name="recentToolCallTurns">The number of newest tool-call turns retained as protocol messages.</param>
+    /// <param name="maxToolResultChars">The maximum characters retained from a single tool result.</param>
+    /// <param name="maxCompactedStateChars">The maximum characters retained in the structured state for older tool calls.</param>
+    /// <returns>A new assertion builder with the compaction limits configured.</returns>
+    public CodebaseAssertion WithConversationCompactionLimits(
+        int recentToolCallTurns,
+        int maxToolResultChars,
+        int maxCompactedStateChars)
+    {
+        if (recentToolCallTurns <= 0)
+            throw new ArgumentOutOfRangeException(nameof(recentToolCallTurns), "Recent tool-call turns must be positive.");
+        if (maxToolResultChars <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxToolResultChars), "Maximum tool-result characters must be positive.");
+        if (maxCompactedStateChars <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxCompactedStateChars), "Maximum compacted-state characters must be positive.");
+
+        return Clone(
+            conversationCompactionEnabled: true,
+            recentToolCallTurns: recentToolCallTurns,
+            maxCompactedToolResultChars: maxToolResultChars,
+            maxCompactedStateChars: maxCompactedStateChars,
+            resetConversationCompactor: true);
+    }
+
+    /// <summary>
     /// Sets the minimum confidence required for both passing and failing verdicts.
     /// </summary>
     /// <param name="minimumConfidence">The minimum confidence value between 0 and 1.</param>
@@ -255,7 +290,7 @@ public sealed class CodebaseAssertion
     public CodebaseAssertion IncludeType(string typeName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(typeName);
-        
+
         return Clone(includedTypes: [.. _includedTypes, typeName]);
     }
 
@@ -319,6 +354,7 @@ public sealed class CodebaseAssertion
             ConversationCompactionEnabled = _conversationCompactionEnabled,
             RecentToolCallTurns = _recentToolCallTurns,
             MaxCompactedToolResultChars = _maxCompactedToolResultChars,
+            MaxCompactedStateChars = _maxCompactedStateChars,
             ConversationCompactor = _conversationCompactor,
             MinimumTrueConfidence = _minimumTrueConfidence,
             MinimumFalseConfidence = _minimumFalseConfidence
@@ -366,18 +402,18 @@ public sealed class CodebaseAssertion
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
         var extension = Path.GetExtension(path);
-        
+
         if (!extension.Equals(".txt", StringComparison.OrdinalIgnoreCase)
             && !extension.Equals(".md", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Requirement file must have .txt or .md extension.", nameof(path));
 
         var fullPath = Path.GetFullPath(path);
-        
+
         if (!File.Exists(fullPath))
             throw new FileNotFoundException("Requirement file was not found.", fullPath);
 
         var requirement = await File.ReadAllTextAsync(fullPath, cancellationToken).ConfigureAwait(false);
-        
+
         ArgumentException.ThrowIfNullOrWhiteSpace(requirement, nameof(path));
 
         return requirement;
@@ -393,6 +429,7 @@ public sealed class CodebaseAssertion
         bool? conversationCompactionEnabled = null,
         int? recentToolCallTurns = null,
         int? maxCompactedToolResultChars = null,
+        int? maxCompactedStateChars = null,
         Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>>? conversationCompactor = null,
         bool resetConversationCompactor = false,
         double? minimumTrueConfidence = null,
@@ -410,6 +447,7 @@ public sealed class CodebaseAssertion
             conversationCompactionEnabled ?? _conversationCompactionEnabled,
             recentToolCallTurns ?? _recentToolCallTurns,
             maxCompactedToolResultChars ?? _maxCompactedToolResultChars,
+            maxCompactedStateChars ?? _maxCompactedStateChars,
             resetConversationCompactor ? null : conversationCompactor ?? _conversationCompactor,
             minimumTrueConfidence ?? _minimumTrueConfidence,
             minimumFalseConfidence ?? _minimumFalseConfidence);

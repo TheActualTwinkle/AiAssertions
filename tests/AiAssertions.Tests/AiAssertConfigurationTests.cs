@@ -21,7 +21,8 @@ public sealed class AiAssertConfigurationTests
             .WithGlobalAdditionalSystemPrompt("first")
             .WithGlobalAdditionalSystemPrompt("second")
             .WithoutGlobalConversationCompaction()
-            .WithGlobalConversationCompactor(conversationCompactor);
+            .WithGlobalConversationCompactor(conversationCompactor)
+            .WithGlobalConversationCompactionLimits(1, 2048, 8192);
 
         var defaults = getDefaults();
         var separator = Environment.NewLine + Environment.NewLine;
@@ -32,7 +33,10 @@ public sealed class AiAssertConfigurationTests
         defaults.SystemPrompt.Should().Be("system prompt");
         defaults.AdditionalSystemPrompt.Should().Be($"first{separator}second");
         defaults.ConversationCompactionEnabled.Should().BeTrue();
-        defaults.ConversationCompactor.Should().BeSameAs(conversationCompactor);
+        defaults.ConversationCompactor.Should().BeNull();
+        defaults.RecentToolCallTurns.Should().Be(1);
+        defaults.MaxCompactedToolResultChars.Should().Be(2048);
+        defaults.MaxCompactedStateChars.Should().Be(8192);
     }
 
     [Fact]
@@ -48,6 +52,21 @@ public sealed class AiAssertConfigurationTests
 
         defaults.ConversationCompactionEnabled.Should().BeFalse();
         defaults.ConversationCompactor.Should().BeNull();
+    }
+
+    [Fact]
+    public void WithGlobalConversationCompactor_WhenConfiguredAfterLimits_ShouldReplaceDefaultCompactor()
+    {
+        var (configuration, getDefaults) = CreateConfiguration();
+        Func<IReadOnlyList<AiChatMessage>, IReadOnlyList<AiChatMessage>> customCompactor = messages => messages;
+
+        configuration
+            .WithGlobalConversationCompactionLimits(1, 2048, 8192)
+            .WithGlobalConversationCompactor(customCompactor);
+
+        var defaults = getDefaults();
+        defaults.ConversationCompactionEnabled.Should().BeTrue();
+        defaults.ConversationCompactor.Should().BeSameAs(customCompactor);
     }
 
     [Theory]
@@ -75,6 +94,27 @@ public sealed class AiAssertConfigurationTests
             .WithParameterName("tokenEstimator");
         conversationCompactor.Should().Throw<ArgumentNullException>()
             .WithParameterName("conversationCompactor");
+    }
+
+    [Theory]
+    [InlineData(0, 1, 1, "recentToolCallTurns")]
+    [InlineData(1, 0, 1, "maxToolResultChars")]
+    [InlineData(1, 1, 0, "maxCompactedStateChars")]
+    public void WithGlobalConversationCompactionLimits_WhenValueIsNotPositive_ShouldThrow(
+        int recentToolCallTurns,
+        int maxToolResultChars,
+        int maxCompactedStateChars,
+        string parameterName)
+    {
+        var (configuration, _) = CreateConfiguration();
+
+        var act = () => configuration.WithGlobalConversationCompactionLimits(
+            recentToolCallTurns,
+            maxToolResultChars,
+            maxCompactedStateChars);
+
+        act.Should().Throw<ArgumentOutOfRangeException>()
+            .WithParameterName(parameterName);
     }
 
     [Theory]

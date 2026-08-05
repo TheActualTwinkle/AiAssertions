@@ -10,24 +10,36 @@ internal sealed class ListProjectsTool : JsonTool<ListProjectsToolArguments>
 
     public override string ParametersJsonSchema => """{"type":"object","properties":{"root":{"type":"string","description":"Codebase root from execution_context.codebase_root. This tool searches only known project manifest filenames. If the stack does not use these manifests, the result can be empty."}}}""";
 
-    protected override ValueTask<object> ExecuteAsync(ListProjectsToolArguments arguments, ToolExecutionContext context, CancellationToken cancellationToken)
+    protected override async ValueTask<object> ExecuteAsync(ListProjectsToolArguments arguments, ToolExecutionContext context, CancellationToken cancellationToken)
     {
         var root = PathSafety.ResolveRoot(context, arguments.Root);
-        var projects = new SortedSet<string>(StringComparer.Ordinal);
+        var indexedFiles = await context.FileIndex.GetFilesAsync(root, cancellationToken).ConfigureAwait(false);
+        var projects = indexedFiles
+            .Where(IsProjectManifest)
+            .Select(path => Path.GetRelativePath(root, path))
+            .ToArray();
 
-        foreach (var pattern in ProjectManifestPatterns)
-            foreach (var path in Directory.EnumerateFiles(root, pattern, SearchOption.AllDirectories))
-                if (!PathSafety.IsIgnoredPath(path))
-                    projects.Add(Path.GetRelativePath(root, path));
-
-        return ValueTask.FromResult<object>(new { projects });
+        return new { projects };
     }
 
-    private static readonly string[] ProjectManifestPatterns =
-    [
-        "*.csproj",
-        "*.fsproj",
-        "*.vbproj",
+    private static bool IsProjectManifest(string path)
+    {
+        var fileName = Path.GetFileName(path);
+        var extension = Path.GetExtension(path);
+
+        return ProjectExtensions.Contains(extension)
+            || ProjectManifestNames.Contains(fileName);
+    }
+
+    private static readonly HashSet<string> ProjectExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".csproj",
+        ".fsproj",
+        ".vbproj"
+    };
+
+    private static readonly HashSet<string> ProjectManifestNames = new(StringComparer.OrdinalIgnoreCase)
+    {
         "package.json",
         "pyproject.toml",
         "go.mod",
@@ -37,5 +49,5 @@ internal sealed class ListProjectsTool : JsonTool<ListProjectsToolArguments>
         "build.gradle.kts",
         "composer.json",
         "Gemfile"
-    ];
+    };
 }

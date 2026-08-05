@@ -12,4 +12,7 @@ internal sealed class FindFilesByNameToolArguments
 
     [JsonPropertyName("max_results")]
     public int? MaxResults { get; init; }
+
+    [JsonPropertyName("offset")]
+    public int? Offset { get; init; }
 }

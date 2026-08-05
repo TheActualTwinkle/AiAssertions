@@ -139,6 +139,24 @@ public sealed class CodebaseAssertionConfigurationTests
     }
 
     [Fact]
+    public async Task CodebaseAssertion_WhenCompactionLimitsAreConfiguredAfterCustomCompactor_ShouldUseDefaultCompactor()
+    {
+        var client = new RecordingToolCallingClient(VerdictResponse());
+        var customCompactorCalls = 0;
+
+        await CreateAssertion(client)
+            .WithConversationCompactor(messages =>
+            {
+                customCompactorCalls++;
+                return messages;
+            })
+            .WithConversationCompactionLimits(1, 2048, 8192)
+            .That("requirement");
+
+        customCompactorCalls.Should().Be(0);
+    }
+
+    [Fact]
     public async Task CodebaseAssertion_WhenCustomCompactorAndTokenLimitAreConfigured_ShouldCompactBeforeApplyingTokenLimitAndRespectBudget()
     {
         var client = new RecordingToolCallingClient(VerdictResponse());

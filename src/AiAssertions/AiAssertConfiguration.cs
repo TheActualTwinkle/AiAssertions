@@ -43,7 +43,7 @@ public sealed class AiAssertConfiguration
             throw new ArgumentOutOfRangeException(nameof(maxToolIterations), "Max tool iterations must be positive.");
 
         var defaults = _getDefaults();
-        
+
         _setDefaults(defaults with { MaxToolIterations = maxToolIterations });
 
         return this;
@@ -179,6 +179,43 @@ public sealed class AiAssertConfiguration
         {
             ConversationCompactionEnabled = true,
             ConversationCompactor = conversationCompactor
+        });
+
+        return this;
+    }
+
+    /// <summary>
+    /// Configures the bounded default conversation compactor for subsequent assertions.
+    /// </summary>
+    /// <remarks>
+    /// Calling this method after
+    /// <see cref="WithGlobalConversationCompactor(Func{IReadOnlyList{AiChatMessage}, IReadOnlyList{AiChatMessage}})"/>
+    /// removes the custom compactor. A custom compactor configured later replaces the bounded default compactor.
+    /// </remarks>
+    /// <param name="recentToolCallTurns">The number of newest tool-call turns retained as protocol messages.</param>
+    /// <param name="maxToolResultChars">The maximum characters retained from a single tool result.</param>
+    /// <param name="maxCompactedStateChars">The maximum characters retained in the structured state for older tool calls.</param>
+    /// <returns>The same configuration builder.</returns>
+    public AiAssertConfiguration WithGlobalConversationCompactionLimits(
+        int recentToolCallTurns,
+        int maxToolResultChars,
+        int maxCompactedStateChars)
+    {
+        if (recentToolCallTurns <= 0)
+            throw new ArgumentOutOfRangeException(nameof(recentToolCallTurns), "Recent tool-call turns must be positive.");
+        if (maxToolResultChars <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxToolResultChars), "Maximum tool-result characters must be positive.");
+        if (maxCompactedStateChars <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxCompactedStateChars), "Maximum compacted-state characters must be positive.");
+
+        var defaults = _getDefaults();
+        _setDefaults(defaults with
+        {
+            ConversationCompactionEnabled = true,
+            ConversationCompactor = null,
+            RecentToolCallTurns = recentToolCallTurns,
+            MaxCompactedToolResultChars = maxToolResultChars,
+            MaxCompactedStateChars = maxCompactedStateChars
         });
 
         return this;

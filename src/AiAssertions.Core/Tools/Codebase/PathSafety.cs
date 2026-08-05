@@ -7,14 +7,15 @@ internal static class PathSafety
     internal static string ResolveRoot(ToolExecutionContext context, string? requestedRoot)
     {
         var allowedRoot = DiscoverRoot(context.WorkingDirectory);
-        
+
         if (string.IsNullOrWhiteSpace(requestedRoot))
             return allowedRoot;
 
         var fullRoot = Path.GetFullPath(requestedRoot);
-        
-        if (!fullRoot.Equals(allowedRoot, StringComparison.Ordinal)
-            && !fullRoot.StartsWith(allowedRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        var comparison = GetPathComparison();
+
+        if (!IsInside(fullRoot, allowedRoot, comparison)
+            || !IsInside(ResolvePhysicalPath(fullRoot), ResolvePhysicalPath(allowedRoot), comparison))
             throw new InvalidOperationException("The requested root is outside the discovered project root.");
 
         return fullRoot;
@@ -23,11 +24,11 @@ internal static class PathSafety
     internal static string ResolveInsideRoot(string root, string relativePath)
     {
         var fullRoot = Path.GetFullPath(root);
-        
         var fullPath = Path.GetFullPath(Path.Combine(fullRoot, relativePath));
-        
-        if (!fullPath.Equals(fullRoot, StringComparison.Ordinal)
-            && !fullPath.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        var comparison = GetPathComparison();
+
+        if (!IsInside(fullPath, fullRoot, comparison)
+            || !IsInside(ResolvePhysicalPath(fullPath), ResolvePhysicalPath(fullRoot), comparison))
             throw new InvalidOperationException("The requested path is outside the project root.");
 
         return fullPath;
@@ -36,7 +37,7 @@ internal static class PathSafety
     internal static string DiscoverRoot(string workingDirectory)
     {
         var directory = new DirectoryInfo(workingDirectory);
-        
+
         while (directory is not null)
         {
             var hasSolutionMarker = directory.EnumerateFiles("*.sln", SearchOption.TopDirectoryOnly).Any()
@@ -64,9 +65,55 @@ internal static class PathSafety
         return Path.GetFullPath(workingDirectory);
     }
 
-    internal static bool IsIgnoredPath(string path) =>
-        path.Contains($"{Path.DirectorySeparatorChar}.git{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-        || path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-        || path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-        || path.Contains($"{Path.DirectorySeparatorChar}node_modules{Path.DirectorySeparatorChar}", StringComparison.Ordinal);
+    internal static bool IsIgnoredPath(string relativePath) =>
+        relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Any(segment => IgnoredDirectoryNames.Contains(segment));
+
+    private static bool IsInside(string path, string root, StringComparison comparison) =>
+        path.Equals(root, comparison)
+        || path.StartsWith(root + Path.DirectorySeparatorChar, comparison);
+
+    private static string ResolvePhysicalPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var pathRoot = Path.GetPathRoot(fullPath)
+            ?? throw new InvalidOperationException("Could not determine the path root.");
+        var relativePath = Path.GetRelativePath(pathRoot, fullPath);
+        if (relativePath == ".")
+            return pathRoot;
+
+        var current = pathRoot;
+        foreach (var segment in relativePath.Split(
+                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            FileSystemInfo fileSystemInfo = Directory.Exists(current)
+                ? new DirectoryInfo(current)
+                : new FileInfo(current);
+
+            if (!fileSystemInfo.Exists || (fileSystemInfo.Attributes & FileAttributes.ReparsePoint) == 0)
+                continue;
+
+            var target = fileSystemInfo.ResolveLinkTarget(returnFinalTarget: true);
+            if (target is not null)
+                current = target.FullName;
+        }
+
+        return Path.GetFullPath(current);
+    }
+
+    private static StringComparison GetPathComparison() =>
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    private static readonly HashSet<string> IgnoredDirectoryNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".git",
+        ".idea",
+        ".vs",
+        ".vscode",
+        "bin",
+        "obj",
+        "node_modules"
+    };
 }

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AiAssertions.Core.Assertions;
 using AiAssertions.Core.Models;
 
@@ -13,47 +14,59 @@ internal static class CodebaseConversationCompactor
         bool compactionEnabled,
         int recentToolCallTurns,
         int maxCompactedToolResultChars,
+        int maxCompactedStateChars,
         int? maxRequestTokens,
         Func<IReadOnlyList<AiChatMessage>, int>? tokenEstimator)
     {
         var requestMessages = customCompactor is not null
             ? customCompactor(messages)
             : compactionEnabled
-                ? BuildCompactedRequestMessages(messages, recentToolCallTurns, maxCompactedToolResultChars)
+                ? BuildCompactedRequestMessages(
+                    messages,
+                    recentToolCallTurns,
+                    maxCompactedToolResultChars,
+                    maxCompactedStateChars)
                 : messages;
 
         return maxRequestTokens is > 0
-            ? ApplyTokenLimit(requestMessages, maxRequestTokens.Value, tokenEstimator)
+            ? ApplyTokenLimit(requestMessages, maxRequestTokens.Value, tokenEstimator, maxCompactedToolResultChars)
             : requestMessages;
     }
 
     private static IReadOnlyList<AiChatMessage> BuildCompactedRequestMessages(
         IReadOnlyList<AiChatMessage> messages,
         int recentToolCallTurns,
-        int maxCompactedToolResultChars)
+        int maxCompactedToolResultChars,
+        int maxCompactedStateChars)
     {
         if (messages.Count <= 2)
             return messages;
 
         var recentStart = FindRecentStartIndex(messages, Math.Max(recentToolCallTurns, 1));
-        if (recentStart <= 2)
-            return messages;
-
-        var compacted = BuildCompactedState(messages.Skip(2).Take(recentStart - 2), maxCompactedToolResultChars);
-        if (string.IsNullOrWhiteSpace(compacted))
-            return messages;
-
         var requestMessages = new List<AiChatMessage>(messages.Count - recentStart + 3)
         {
             messages[0],
-            messages[1],
-            new()
-            {
-                Role = "user",
-                Content = compacted
-            }
+            messages[1]
         };
 
+        if (recentStart > 2)
+        {
+            var compacted = BuildCompactedState(
+                messages.Skip(2).Take(recentStart - 2),
+                maxCompactedToolResultChars,
+                maxCompactedStateChars);
+
+            if (!string.IsNullOrWhiteSpace(compacted))
+                requestMessages.Add(new AiChatMessage
+                {
+                    Role = "user",
+                    Content = compacted
+                });
+        }
+
+        // The most recent tool turn is live evidence. Keep it byte-for-byte intact unless
+        // the caller explicitly configured a request token limit, in which case
+        // ApplyTokenLimit is responsible for shrinking it as a last resort.
         requestMessages.AddRange(messages.Skip(recentStart));
 
         return requestMessages;
@@ -62,7 +75,8 @@ internal static class CodebaseConversationCompactor
     private static IReadOnlyList<AiChatMessage> ApplyTokenLimit(
         IReadOnlyList<AiChatMessage> messages,
         int maxRequestTokens,
-        Func<IReadOnlyList<AiChatMessage>, int>? tokenEstimator)
+        Func<IReadOnlyList<AiChatMessage>, int>? tokenEstimator,
+        int maxToolResultChars)
     {
         var estimateTokens = tokenEstimator ?? EstimateTokens;
 
@@ -76,10 +90,34 @@ internal static class CodebaseConversationCompactor
             return mandatoryMessages;
 
         var groups = BuildMessageGroups(messages.Skip(2)).ToArray();
-        var selectedGroups = new Stack<IReadOnlyList<AiChatMessage>>();
-        var omittedMessages = 0;
+        if (groups.Length == 0)
+            return mandatoryMessages;
 
-        for (var index = groups.Length - 1; index >= 0; index--)
+        var selectedGroups = new Stack<IReadOnlyList<AiChatMessage>>();
+        var newestGroup = groups[^1];
+        var newestCandidate = mandatoryMessages.Concat(newestGroup).ToArray();
+
+        if (estimateTokens(newestCandidate) > maxRequestTokens)
+        {
+            newestCandidate = ShrinkToolResultsToFit(
+                    newestCandidate,
+                    maxRequestTokens,
+                    estimateTokens,
+                    maxToolResultChars)
+                .ToArray();
+
+            if (estimateTokens(newestCandidate) > maxRequestTokens)
+                return mandatoryMessages;
+
+            newestGroup = newestCandidate.Skip(mandatoryMessages.Length).ToArray();
+        }
+
+        selectedGroups.Push(newestGroup);
+        var omittedMessages = groups
+            .Take(groups.Length - 1)
+            .Sum(group => group.Count);
+
+        for (var index = groups.Length - 2; index >= 0; index--)
         {
             var group = groups[index];
             var candidate = mandatoryMessages
@@ -90,12 +128,10 @@ internal static class CodebaseConversationCompactor
             if (estimateTokens(candidate) <= maxRequestTokens)
             {
                 selectedGroups.Push(group);
+                omittedMessages -= group.Count;
             }
             else
             {
-                omittedMessages += groups
-                    .Take(index + 1)
-                    .Sum(omittedGroup => omittedGroup.Count);
                 break;
             }
         }
@@ -199,9 +235,12 @@ internal static class CodebaseConversationCompactor
         return 2;
     }
 
-    private static string BuildCompactedState(IEnumerable<AiChatMessage> compactedMessages, int maxToolResultChars)
+    private static string BuildCompactedState(
+        IEnumerable<AiChatMessage> compactedMessages,
+        int maxToolResultChars,
+        int maxCompactedStateChars)
     {
-        var entries = new List<object>();
+        var entries = new List<CompactedToolCall>();
         AiChatMessage? currentAssistant = null;
 
         foreach (var message in compactedMessages)
@@ -216,21 +255,40 @@ internal static class CodebaseConversationCompactor
                 continue;
 
             var toolCall = currentAssistant?.ToolCalls?.FirstOrDefault(call => call.Id == message.ToolCallId);
-            entries.Add(new
+            entries.Add(new CompactedToolCall
             {
-                tool = message.Name,
-                arguments = TryReadJson(toolCall?.ArgumentsJson),
-                result_summary = SummarizeToolResult(message.Content, maxToolResultChars)
+                Tool = message.Name,
+                Arguments = TryReadJson(toolCall?.ArgumentsJson),
+                ResultSummary = SummarizeToolResult(message.Content, maxToolResultChars)
             });
         }
 
         if (entries.Count == 0)
             return string.Empty;
 
+        var omittedToolCalls = 0;
+        var state = SerializeCompactedState(entries, omittedToolCalls);
+
+        for (var index = 0; state.Length > maxCompactedStateChars && index < entries.Count; index++)
+        {
+            entries[index].ResultSummary = "Result omitted to stay within the compacted state budget.";
+            state = SerializeCompactedState(entries, omittedToolCalls);
+        }
+
+        while (state.Length > maxCompactedStateChars && entries.Count > 0)
+        {
+            entries.RemoveAt(0);
+            omittedToolCalls++;
+            state = SerializeCompactedState(entries, omittedToolCalls);
+        }
+
+        if (state.Length > maxCompactedStateChars)
+            return string.Empty;
+
         var builder = new StringBuilder();
         builder.AppendLine("Compacted assertion state from earlier tool calls:");
         builder.AppendLine("```json");
-        builder.AppendLine(JsonSerializer.Serialize(new { completed_tool_calls = entries }, AssertionJson.Options));
+        builder.AppendLine(state);
         builder.AppendLine("```");
         builder.AppendLine("Continue from this state. Do not repeat completed searches or file reads unless the earlier summary is insufficient.");
 
@@ -257,6 +315,116 @@ internal static class CodebaseConversationCompactor
         if (content.Length <= maxChars)
             return content;
 
-        return string.Concat(content.AsSpan(0, maxChars), "... [truncated]");
+        const string marker = "... [truncated]";
+        if (maxChars <= marker.Length)
+            return marker[..maxChars];
+
+        var prefixLength = maxChars - marker.Length;
+        if (prefixLength > 0 && char.IsHighSurrogate(content[prefixLength - 1]))
+            prefixLength--;
+
+        return string.Concat(content.AsSpan(0, prefixLength), marker);
+    }
+
+    private static IReadOnlyList<AiChatMessage> ShrinkToolResultsToFit(
+        IReadOnlyList<AiChatMessage> messages,
+        int maxRequestTokens,
+        Func<IReadOnlyList<AiChatMessage>, int> estimateTokens,
+        int maxToolResultChars)
+    {
+        var result = messages.ToArray();
+        var originalContents = result
+            .Select(message => message.Content)
+            .ToArray();
+
+        for (var attempt = 0; attempt < 64 && estimateTokens(result) > maxRequestTokens; attempt++)
+        {
+            var candidate = result
+                .Select((message, index) => (message, index))
+                .Where(item => item.message.Role == "tool" && item.message.Content.Length > 32)
+                .OrderByDescending(item => item.message.Content.Length)
+                .FirstOrDefault();
+
+            if (candidate.message is null)
+                break;
+
+            var currentLength = candidate.message.Content.Length;
+            var targetLength = Math.Max(32, Math.Min(maxToolResultChars, currentLength / 2));
+            if (targetLength >= currentLength)
+                targetLength = Math.Max(32, currentLength - 32);
+
+            result[candidate.index] = candidate.message with
+            {
+                Content = BuildTruncatedToolResult(originalContents[candidate.index], targetLength)
+            };
+        }
+
+        return result;
+    }
+
+    private static string BuildTruncatedToolResult(string content, int maxChars)
+    {
+        if (content.Length <= maxChars)
+            return content;
+
+        var emptyPayload = SerializeTruncatedToolResult(content.Length, string.Empty);
+        if (emptyPayload.Length > maxChars)
+            return "{\"truncated\":true}";
+
+        var low = 0;
+        var high = Math.Min(content.Length, maxChars);
+        var best = emptyPayload;
+
+        while (low <= high)
+        {
+            var probeLength = low + ((high - low) / 2);
+            var prefixLength = probeLength;
+            if (prefixLength > 0 && char.IsHighSurrogate(content[prefixLength - 1]))
+                prefixLength--;
+
+            var candidate = SerializeTruncatedToolResult(content.Length, content[..prefixLength]);
+            if (candidate.Length <= maxChars)
+            {
+                best = candidate;
+                low = probeLength + 1;
+            }
+            else
+            {
+                high = probeLength - 1;
+            }
+        }
+
+        return best;
+    }
+
+    private static string SerializeTruncatedToolResult(int originalChars, string contentPrefix) =>
+        JsonSerializer.Serialize(
+            new
+            {
+                truncated = true,
+                original_chars = originalChars,
+                content_prefix = contentPrefix
+            },
+            AssertionJson.Options);
+
+    private static string SerializeCompactedState(IReadOnlyList<CompactedToolCall> entries, int omittedToolCalls) =>
+        JsonSerializer.Serialize(
+            new
+            {
+                completed_tool_calls = entries,
+                omitted_tool_calls = omittedToolCalls
+            },
+            AssertionJson.Options);
+
+    private sealed class CompactedToolCall
+    {
+        [JsonPropertyName("tool")]
+        public string? Tool { get; init; }
+
+        [JsonPropertyName("arguments")]
+        public object? Arguments { get; init; }
+
+        [JsonPropertyName("result_summary")]
+        public string ResultSummary { get; set; } = string.Empty;
     }
 }
