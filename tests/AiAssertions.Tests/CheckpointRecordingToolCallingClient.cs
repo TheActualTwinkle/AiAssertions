@@ -9,6 +9,13 @@ internal sealed class CheckpointRecordingToolCallingClient(
 {
     private readonly Queue<AiToolResponse> _responses = new(responses);
 
+    public AiModelRequestMetadata? RequestMetadata { get; init; } = new()
+    {
+        Provider = "Test",
+        RequestedModel = "test-model",
+        Temperature = 0.25
+    };
+
     public Task<AiTextResponse> GetResponseAsync(
         AiTextRequest request,
         CancellationToken cancellationToken = default) =>

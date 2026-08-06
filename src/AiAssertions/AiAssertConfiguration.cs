@@ -100,6 +100,9 @@ public sealed class AiAssertConfiguration
     }
 
     /// <summary>
+    /// <para>
+    /// <c>CAUTION</c>
+    /// </para>
     /// Sets the global replacement for the codebase assertion agent's default system prompt.
     /// </summary>
     /// <remarks>

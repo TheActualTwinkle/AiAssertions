@@ -211,11 +211,19 @@ public sealed class CodebaseAssertionConfigurationTests
             .That("requirement");
 
         result.ExecutionTrace.Should().NotBeNull();
-        result.ExecutionTrace!.Entries.Should().HaveCount(4);
+        result.ExecutionTrace!.Entries.Should().HaveCount(5);
+        result.ExecutionTrace.Entries.Select(entry => entry.Sequence).Should()
+            .Equal(Enumerable.Range(1, result.ExecutionTrace.Entries.Count));
 
         var firstExchange = result.ExecutionTrace.Entries[0]
             .Should().BeOfType<CodebaseAssertionModelExchangeTraceEntry>().Subject;
         firstExchange.Request.Messages.Should().Contain(message => message.Content.Contains("requirement"));
+        firstExchange.RequestMetadata.Should().BeEquivalentTo(new AiModelRequestMetadata
+        {
+            Provider = "Test",
+            RequestedModel = "test-model",
+            Temperature = 0.25
+        });
         firstExchange.Response!.ToolCalls.Should().ContainSingle(call => call.Id == "call-1");
         firstExchange.Error.Should().BeNull();
 
@@ -228,18 +236,72 @@ public sealed class CodebaseAssertionConfigurationTests
         toolExecution.CacheHit.Should().BeFalse();
         toolExecution.Error.Should().BeNull();
 
-        result.ExecutionTrace.Entries[2].Should().BeOfType<CodebaseAssertionModelExchangeTraceEntry>();
-        var completed = result.ExecutionTrace.Entries[3]
-            .Should().BeOfType<CodebaseAssertionRunCompletedTraceEntry>().Subject;
-        completed.Passed.Should().BeTrue();
-        completed.IsConclusive.Should().BeTrue();
+        var finalExchange = result.ExecutionTrace.Entries[2]
+            .Should().BeOfType<CodebaseAssertionModelExchangeTraceEntry>().Subject;
+        finalExchange.Response!.Metadata.Should().NotBeNull();
+        finalExchange.Response.Metadata!.Provider.Should().Be("Test");
+        finalExchange.Response.Metadata.Temperature.Should().Be(0.25);
+        finalExchange.Response.Metadata.Usage!.TotalTokens.Should().Be(120);
+
+        var modelVerdict = result.ExecutionTrace.Entries[3]
+            .Should().BeOfType<CodebaseAssertionModelVerdictReceivedTraceEntry>().Subject;
+        modelVerdict.Passed.Should().BeTrue();
+        modelVerdict.IsConclusive.Should().BeTrue();
+
+        var finalVerdict = result.ExecutionTrace.Entries[4]
+            .Should().BeOfType<CodebaseAssertionFinalVerdictTraceEntry>().Subject;
+        finalVerdict.Verdict.Should().Be(CodebaseAssertionVerdict.Passed);
+        finalVerdict.ModelVerdictReceived.Should().BeTrue();
+        finalVerdict.ModelPassed.Should().BeTrue();
+        finalVerdict.ModelIsConclusive.Should().BeTrue();
+        finalVerdict.AppliedConfidenceThreshold.Should().Be(0);
+        finalVerdict.Decision.Should().Be(CodebaseAssertionFinalVerdictDecision.Accepted);
+        finalVerdict.Comment.Should().Be("ok");
 
         var json = result.ExecutionTrace.ToJson();
         json.Should().Contain("\"kind\": \"modelExchange\"");
         json.Should().Contain("\"kind\": \"toolExecution\"");
+        json.Should().Contain("\"kind\": \"modelVerdictReceived\"");
+        json.Should().Contain("\"kind\": \"finalVerdict\"");
+        json.Should().Contain("\"verdict\": \"passed\"");
+        json.Should().Contain("\"decision\": \"accepted\"");
+        json.Should().Contain("\"requestMetadata\"");
         json.Should().Contain("requirement");
         json.Should().NotContain("\"payload\"");
         json.Should().NotContain("payloadJson");
+    }
+
+    [Fact]
+    public async Task WithExecutionTrace_WhenConfidenceIsBelowTolerance_ShouldRecordModelAndFinalVerdicts()
+    {
+        var response = new AiToolResponse
+        {
+            Content = """{"passed":true,"confidence":0.5,"is_conclusive":true,"reason":"probably","evidence":[],"missing_evidence":[]}""",
+            ToolCalls = []
+        };
+
+        var result = await CreateAssertion(new RecordingToolCallingClient(response))
+            .WithConfidenceTolerance(0.9)
+            .WithExecutionTrace()
+            .That("requirement");
+
+        result.Verdict.Should().Be(CodebaseAssertionVerdict.NotDetermined);
+        var modelVerdict = result.ExecutionTrace!.Entries
+            .OfType<CodebaseAssertionModelVerdictReceivedTraceEntry>()
+            .Should().ContainSingle().Subject;
+        modelVerdict.Passed.Should().BeTrue();
+        modelVerdict.Confidence.Should().Be(0.5);
+
+        var finalVerdict = result.ExecutionTrace.Entries
+            .OfType<CodebaseAssertionFinalVerdictTraceEntry>()
+            .Should().ContainSingle().Subject;
+        finalVerdict.Verdict.Should().Be(CodebaseAssertionVerdict.NotDetermined);
+        finalVerdict.ModelVerdictReceived.Should().BeTrue();
+        finalVerdict.ModelPassed.Should().BeTrue();
+        finalVerdict.ModelIsConclusive.Should().BeTrue();
+        finalVerdict.AppliedConfidenceThreshold.Should().Be(0.9);
+        finalVerdict.Decision.Should().Be(CodebaseAssertionFinalVerdictDecision.BelowConfidenceThreshold);
+        finalVerdict.Comment.Should().Contain("below configured tolerance");
     }
 
     [Fact]
@@ -251,6 +313,35 @@ public sealed class CodebaseAssertionConfigurationTests
         var result = await CreateAssertion(client, defaults).That("requirement");
 
         result.ExecutionTrace.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task WithExecutionTrace_WhenRunTimesOut_ShouldRecordOnlyFinalLibraryVerdict()
+    {
+        var result = await CreateAssertion(new HangingClient())
+            .WithTimeout(TimeSpan.FromMilliseconds(100))
+            .WithExecutionTrace()
+            .That("requirement");
+
+        result.ExecutionTrace.Should().NotBeNull();
+        result.ExecutionTrace!.Entries.Should().NotContain(
+            entry => entry is CodebaseAssertionModelVerdictReceivedTraceEntry);
+        var failedExchange = result.ExecutionTrace.Entries
+            .OfType<CodebaseAssertionModelExchangeTraceEntry>()
+            .Should().ContainSingle().Subject;
+        failedExchange.RequestMetadata!.RequestedModel.Should().Be("hanging-model");
+        failedExchange.Response.Should().BeNull();
+        failedExchange.Error.Should().Contain(nameof(TaskCanceledException));
+        var finalVerdict = result.ExecutionTrace.Entries
+            .OfType<CodebaseAssertionFinalVerdictTraceEntry>()
+            .Should().ContainSingle().Subject;
+        finalVerdict.Verdict.Should().Be(CodebaseAssertionVerdict.NotDetermined);
+        finalVerdict.ModelVerdictReceived.Should().BeFalse();
+        finalVerdict.ModelPassed.Should().BeNull();
+        finalVerdict.ModelIsConclusive.Should().BeNull();
+        finalVerdict.AppliedConfidenceThreshold.Should().BeNull();
+        finalVerdict.Decision.Should().Be(CodebaseAssertionFinalVerdictDecision.NoModelVerdict);
+        finalVerdict.Comment.Should().Contain("Timed out");
     }
 
     private static CodebaseAssertion CreateAssertion(
@@ -277,6 +368,20 @@ public sealed class CodebaseAssertionConfigurationTests
         new()
         {
             Content = Verdict,
-            ToolCalls = []
+            ToolCalls = [],
+            Metadata = new AiModelResponseMetadata
+            {
+                Provider = "Test",
+                RequestedModel = "test-model",
+                ResponseModel = "test-model-2026-08-06",
+                Temperature = 0.25,
+                FinishReason = "stop",
+                Usage = new AiTokenUsage
+                {
+                    PromptTokens = 100,
+                    CompletionTokens = 20,
+                    TotalTokens = 120
+                }
+            }
         };
 }

@@ -5,6 +5,13 @@ namespace AiAssertions.Tests;
 
 internal sealed class HangingClient : IToolCallingClient
 {
+    public AiModelRequestMetadata? RequestMetadata { get; init; } = new()
+    {
+        Provider = "Test",
+        RequestedModel = "hanging-model",
+        Temperature = 0.5
+    };
+
     public Task<AiToolResponse> GetToolResponseAsync(
         AiToolRequest request,
         CancellationToken cancellationToken = default) =>

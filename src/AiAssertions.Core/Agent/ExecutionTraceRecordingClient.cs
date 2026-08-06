@@ -13,15 +13,19 @@ internal sealed class ExecutionTraceRecordingClient(
         CancellationToken cancellationToken = default)
     {
         var activity = recorder.Begin();
+        var requestMetadata = inner.RequestMetadata;
 
         try
         {
-            var response = await inner.GetResponseAsync(request, cancellationToken).ConfigureAwait(false);
+            var response = await inner
+                .GetResponseAsync(request, cancellationToken)
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
             recorder.Complete(
                 activity,
                 AiAssertionExecutionTraceEntryKind.ConversationCompactionModelExchange,
                 "conversation_checkpoint",
-                new { request, response });
+                new { request, requestMetadata, response });
             return response;
         }
         catch (Exception exception)
@@ -30,7 +34,7 @@ internal sealed class ExecutionTraceRecordingClient(
                 activity,
                 AiAssertionExecutionTraceEntryKind.ConversationCompactionModelExchange,
                 "conversation_checkpoint",
-                new { request, error = exception.ToString() });
+                new { request, requestMetadata, error = exception.ToString() });
             throw;
         }
     }
@@ -40,15 +44,19 @@ internal sealed class ExecutionTraceRecordingClient(
         CancellationToken cancellationToken = default)
     {
         var activity = recorder.Begin();
+        var requestMetadata = inner.RequestMetadata;
 
         try
         {
-            var response = await inner.GetToolResponseAsync(request, cancellationToken).ConfigureAwait(false);
+            var response = await inner
+                .GetToolResponseAsync(request, cancellationToken)
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
             recorder.Complete(
                 activity,
                 AiAssertionExecutionTraceEntryKind.ModelExchange,
                 "tool_iteration",
-                new { request, response });
+                new { request, requestMetadata, response });
             return response;
         }
         catch (Exception exception)
@@ -57,7 +65,7 @@ internal sealed class ExecutionTraceRecordingClient(
                 activity,
                 AiAssertionExecutionTraceEntryKind.ModelExchange,
                 "tool_iteration",
-                new { request, error = exception.ToString() });
+                new { request, requestMetadata, error = exception.ToString() });
             throw;
         }
     }

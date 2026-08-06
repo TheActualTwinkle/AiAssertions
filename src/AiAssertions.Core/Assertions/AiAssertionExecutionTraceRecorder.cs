@@ -54,7 +54,10 @@ internal sealed class AiAssertionExecutionTraceRecorder
         AiAssertionExecutionTraceEntry[] entries;
 
         lock (_syncRoot)
-            entries = _entries.OrderBy(entry => entry.Sequence).ToArray();
+            entries = _entries
+                .OrderBy(entry => entry.Sequence)
+                .Select((entry, index) => entry with { Sequence = index + 1 })
+                .ToArray();
 
         return new AiAssertionExecutionTrace
         {

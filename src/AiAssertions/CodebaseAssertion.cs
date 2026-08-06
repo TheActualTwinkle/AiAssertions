@@ -368,15 +368,7 @@ public sealed class CodebaseAssertion
                 .ToArray(),
             ExecutionTrace = result.ExecutionTrace is null
                 ? null
-                : new CodebaseAssertionExecutionTrace
-                {
-                    StartedAtUtc = result.ExecutionTrace.StartedAtUtc,
-                    CompletedAtUtc = result.ExecutionTrace.CompletedAtUtc,
-                    Duration = result.ExecutionTrace.Duration,
-                    Entries = result.ExecutionTrace.Entries
-                        .Select(ToExecutionTraceEntry)
-                        .ToArray()
-                }
+                : ToExecutionTrace(result.ExecutionTrace, result, verdict, comment)
         };
     }
 
@@ -469,9 +461,64 @@ public sealed class CodebaseAssertion
             AiAssertionExecutionTraceEntryKind.ConversationCompaction =>
                 CreateConversationCompactionTraceEntry(entry, payload),
             AiAssertionExecutionTraceEntryKind.ToolExecution => CreateToolExecutionTraceEntry(entry, payload),
-            AiAssertionExecutionTraceEntryKind.RunCompleted => CreateRunCompletedTraceEntry(entry, payload),
+            AiAssertionExecutionTraceEntryKind.ModelVerdictReceived =>
+                CreateModelVerdictReceivedTraceEntry(entry, payload),
             _ => throw new ArgumentOutOfRangeException(nameof(entry), entry.Kind, "Unknown execution trace entry kind.")
         };
+    }
+
+    private CodebaseAssertionExecutionTrace ToExecutionTrace(
+        AiAssertionExecutionTrace trace,
+        AiAssertionResult result,
+        CodebaseAssertionVerdict verdict,
+        string comment)
+    {
+        var entries = trace.Entries.Select(ToExecutionTraceEntry).ToList();
+        var completedAtUtc = DateTimeOffset.UtcNow;
+        var modelVerdictReceived = trace.Entries.Any(
+            entry => entry.Kind == AiAssertionExecutionTraceEntryKind.ModelVerdictReceived);
+        double? appliedConfidenceThreshold = modelVerdictReceived && result.IsConclusive
+            ? result.Passed ? _minimumTrueConfidence : _minimumFalseConfidence
+            : null;
+        var decision = GetFinalVerdictDecision(modelVerdictReceived, result.IsConclusive, verdict);
+        entries.Add(new CodebaseAssertionFinalVerdictTraceEntry
+        {
+            Sequence = entries.Count + 1,
+            StartedAtUtc = completedAtUtc,
+            Duration = TimeSpan.Zero,
+            Verdict = verdict,
+            Confidence = result.Confidence,
+            ModelVerdictReceived = modelVerdictReceived,
+            ModelPassed = modelVerdictReceived ? result.Passed : null,
+            ModelIsConclusive = modelVerdictReceived ? result.IsConclusive : null,
+            AppliedConfidenceThreshold = appliedConfidenceThreshold,
+            Decision = decision,
+            Comment = comment
+        });
+
+        return new CodebaseAssertionExecutionTrace
+        {
+            StartedAtUtc = trace.StartedAtUtc,
+            CompletedAtUtc = completedAtUtc,
+            Duration = completedAtUtc - trace.StartedAtUtc,
+            Entries = entries
+        };
+    }
+
+    private static CodebaseAssertionFinalVerdictDecision GetFinalVerdictDecision(
+        bool modelVerdictReceived,
+        bool modelIsConclusive,
+        CodebaseAssertionVerdict verdict)
+    {
+        if (!modelVerdictReceived)
+            return CodebaseAssertionFinalVerdictDecision.NoModelVerdict;
+
+        if (!modelIsConclusive)
+            return CodebaseAssertionFinalVerdictDecision.ModelInconclusive;
+
+        return verdict == CodebaseAssertionVerdict.NotDetermined
+            ? CodebaseAssertionFinalVerdictDecision.BelowConfidenceThreshold
+            : CodebaseAssertionFinalVerdictDecision.Accepted;
     }
 
     private static CodebaseAssertionModelExchangeTraceEntry CreateModelExchangeTraceEntry(
@@ -483,6 +530,7 @@ public sealed class CodebaseAssertion
             StartedAtUtc = entry.StartedAtUtc,
             Duration = entry.Duration,
             Request = DeserializeRequiredTraceProperty<AiToolRequest>(payload, "request"),
+            RequestMetadata = DeserializeOptionalTraceProperty<AiModelRequestMetadata>(payload, "requestMetadata"),
             Response = DeserializeOptionalTraceProperty<AiToolResponse>(payload, "response"),
             Error = GetOptionalTraceString(payload, "error")
         };
@@ -496,6 +544,7 @@ public sealed class CodebaseAssertion
             StartedAtUtc = entry.StartedAtUtc,
             Duration = entry.Duration,
             Request = DeserializeRequiredTraceProperty<AiTextRequest>(payload, "request"),
+            RequestMetadata = DeserializeOptionalTraceProperty<AiModelRequestMetadata>(payload, "requestMetadata"),
             Response = DeserializeOptionalTraceProperty<AiTextResponse>(payload, "response"),
             Error = GetOptionalTraceString(payload, "error")
         };
@@ -531,7 +580,7 @@ public sealed class CodebaseAssertion
             Error = GetOptionalTraceString(payload, "error")
         };
 
-    private static CodebaseAssertionRunCompletedTraceEntry CreateRunCompletedTraceEntry(
+    private static CodebaseAssertionModelVerdictReceivedTraceEntry CreateModelVerdictReceivedTraceEntry(
         AiAssertionExecutionTraceEntry entry,
         JsonElement payload) =>
         new()

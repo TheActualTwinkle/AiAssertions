@@ -26,6 +26,14 @@ internal sealed class GeminiClient : IToolCallingClient
     }
 
     /// <inheritdoc />
+    public AiModelRequestMetadata RequestMetadata => new()
+    {
+        Provider = "Google Gemini",
+        RequestedModel = GetModelId(_options.Model),
+        Temperature = _options.Temperature
+    };
+
+    /// <inheritdoc />
     public async Task<AiTextResponse> GetResponseAsync(AiTextRequest request, CancellationToken cancellationToken = default)
     {
         var body = CreateRequestBody(request.Messages, tools: null);
@@ -33,7 +41,8 @@ internal sealed class GeminiClient : IToolCallingClient
 
         return new AiTextResponse
         {
-            Content = ExtractText(json)
+            Content = ExtractText(json),
+            Metadata = CreateResponseMetadata(json)
         };
     }
 
@@ -47,9 +56,38 @@ internal sealed class GeminiClient : IToolCallingClient
         return new AiToolResponse
         {
             Content = calls.Count == 0 ? ExtractText(json) : null,
-            ToolCalls = calls
+            ToolCalls = calls,
+            Metadata = CreateResponseMetadata(json)
         };
     }
+
+    private AiModelResponseMetadata CreateResponseMetadata(JsonNode json)
+    {
+        var requestMetadata = RequestMetadata;
+        var usage = json["usageMetadata"];
+
+        return new AiModelResponseMetadata
+        {
+            Provider = requestMetadata.Provider,
+            RequestedModel = requestMetadata.RequestedModel,
+            ResponseModel = json["modelVersion"]?.GetValue<string>(),
+            Temperature = requestMetadata.Temperature,
+            FinishReason = json["candidates"]?[0]?["finishReason"]?.GetValue<string>(),
+            Usage = usage is null
+                ? null
+                : new AiTokenUsage
+                {
+                    PromptTokens = GetTokenCount(usage["promptTokenCount"]),
+                    CompletionTokens = GetTokenCount(usage["candidatesTokenCount"]),
+                    TotalTokens = GetTokenCount(usage["totalTokenCount"]),
+                    CachedTokens = GetTokenCount(usage["cachedContentTokenCount"]),
+                    ReasoningTokens = GetTokenCount(usage["thoughtsTokenCount"])
+                }
+        };
+    }
+
+    private static long? GetTokenCount(JsonNode? value) =>
+        value?.GetValue<long>();
 
     private JsonObject CreateRequestBody(IReadOnlyList<AiChatMessage> messages, JsonArray? tools)
     {

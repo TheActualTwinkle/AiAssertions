@@ -1,5 +1,6 @@
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace AiAssertions;
 
@@ -41,6 +42,7 @@ public sealed record CodebaseAssertionExecutionTrace
         JsonSerializer.Serialize(this, new JsonSerializerOptions(JsonSerializerDefaults.Web)
         {
             WriteIndented = indented,
-            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
         });
 }

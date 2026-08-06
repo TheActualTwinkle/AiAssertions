@@ -6,5 +6,5 @@ internal enum AiAssertionExecutionTraceEntryKind
     ConversationCompactionModelExchange,
     ConversationCompaction,
     ToolExecution,
-    RunCompleted
+    ModelVerdictReceived
 }

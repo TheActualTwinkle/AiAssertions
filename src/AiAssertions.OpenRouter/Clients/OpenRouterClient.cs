@@ -36,6 +36,14 @@ internal sealed class OpenRouterClient : IToolCallingClient
     }
 
     /// <inheritdoc />
+    public AiModelRequestMetadata RequestMetadata => new()
+    {
+        Provider = "OpenRouter",
+        RequestedModel = GetModelId(_options.Model),
+        Temperature = _options.Temperature
+    };
+
+    /// <inheritdoc />
     public async Task<AiTextResponse> GetResponseAsync(AiTextRequest request, CancellationToken cancellationToken = default)
     {
         var body = new JsonObject
@@ -50,7 +58,8 @@ internal sealed class OpenRouterClient : IToolCallingClient
         
         return new AiTextResponse
         {
-            Content = content
+            Content = content,
+            Metadata = CreateResponseMetadata(json)
         };
     }
 
@@ -103,9 +112,38 @@ internal sealed class OpenRouterClient : IToolCallingClient
         return new AiToolResponse
         {
             Content = content,
-            ToolCalls = calls
+            ToolCalls = calls,
+            Metadata = CreateResponseMetadata(json)
         };
     }
+
+    private AiModelResponseMetadata CreateResponseMetadata(JsonNode json)
+    {
+        var requestMetadata = RequestMetadata;
+        var usage = json["usage"];
+
+        return new AiModelResponseMetadata
+        {
+            Provider = requestMetadata.Provider,
+            RequestedModel = requestMetadata.RequestedModel,
+            ResponseModel = json["model"]?.GetValue<string>(),
+            Temperature = requestMetadata.Temperature,
+            FinishReason = json["choices"]?[0]?["finish_reason"]?.GetValue<string>(),
+            Usage = usage is null
+                ? null
+                : new AiTokenUsage
+                {
+                    PromptTokens = GetTokenCount(usage["prompt_tokens"]),
+                    CompletionTokens = GetTokenCount(usage["completion_tokens"]),
+                    TotalTokens = GetTokenCount(usage["total_tokens"]),
+                    CachedTokens = GetTokenCount(usage["prompt_tokens_details"]?["cached_tokens"]),
+                    ReasoningTokens = GetTokenCount(usage["completion_tokens_details"]?["reasoning_tokens"])
+                }
+        };
+    }
+
+    private static long? GetTokenCount(JsonNode? value) =>
+        value?.GetValue<long>();
 
     private async Task<JsonNode> SendAsync(JsonObject body, CancellationToken cancellationToken)
     {

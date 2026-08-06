@@ -9,4 +9,9 @@ public sealed record AiTextResponse
     /// Gets the response text content.
     /// </summary>
     public required string Content { get; init; }
+
+    /// <summary>
+    /// Gets model configuration and provider response metadata, when supplied by the client.
+    /// </summary>
+    public AiModelResponseMetadata? Metadata { get; init; }
 }

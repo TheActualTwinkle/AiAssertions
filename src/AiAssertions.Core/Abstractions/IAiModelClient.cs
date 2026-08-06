@@ -8,6 +8,14 @@ namespace AiAssertions.Core.Abstractions;
 public interface IAiModelClient
 {
     /// <summary>
+    /// Gets model configuration metadata that can be recorded before a request is sent.
+    /// </summary>
+    /// <remarks>
+    /// Custom clients may leave this property unimplemented when request metadata is unavailable.
+    /// </remarks>
+    AiModelRequestMetadata? RequestMetadata => null;
+
+    /// <summary>
     /// Sends a text request to the model and returns the generated response.
     /// </summary>
     /// <param name="request">The text request to send.</param>

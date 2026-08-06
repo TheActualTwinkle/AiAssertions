@@ -10,11 +10,12 @@ namespace AiAssertions;
 [JsonDerivedType(typeof(CodebaseAssertionCompactionModelExchangeTraceEntry), "conversationCompactionModelExchange")]
 [JsonDerivedType(typeof(CodebaseAssertionConversationCompactionTraceEntry), "conversationCompaction")]
 [JsonDerivedType(typeof(CodebaseAssertionToolExecutionTraceEntry), "toolExecution")]
-[JsonDerivedType(typeof(CodebaseAssertionRunCompletedTraceEntry), "runCompleted")]
+[JsonDerivedType(typeof(CodebaseAssertionModelVerdictReceivedTraceEntry), "modelVerdictReceived")]
+[JsonDerivedType(typeof(CodebaseAssertionFinalVerdictTraceEntry), "finalVerdict")]
 public abstract record CodebaseAssertionExecutionTraceEntry
 {
     /// <summary>
-    /// Gets the sequence assigned when the operation started.
+    /// Gets the one-based chronological position of the entry in the trace.
     /// </summary>
     public required int Sequence { get; init; }
 

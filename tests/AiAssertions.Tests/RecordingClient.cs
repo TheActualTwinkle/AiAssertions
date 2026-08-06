@@ -7,6 +7,13 @@ internal sealed class RecordingClient(params AiToolResponse[] responses) : ITool
 {
     private readonly Queue<AiToolResponse> _responses = new(responses);
 
+    public AiModelRequestMetadata? RequestMetadata { get; init; } = new()
+    {
+        Provider = "Test",
+        RequestedModel = "test-model",
+        Temperature = 0.25
+    };
+
     internal List<AiToolRequest> Requests { get; } = [];
 
     public Task<AiToolResponse> GetToolResponseAsync(

@@ -14,4 +14,9 @@ public sealed record AiToolResponse
     /// Gets the tool calls requested by the model.
     /// </summary>
     public required IReadOnlyList<AiToolCall> ToolCalls { get; init; }
+
+    /// <summary>
+    /// Gets model configuration and provider response metadata, when supplied by the client.
+    /// </summary>
+    public AiModelResponseMetadata? Metadata { get; init; }
 }

@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/AiAssertions/AiAssertions.csproj" />
+    <ProjectReference Include="../../src/AiAssertions.Anthropic/AiAssertions.Anthropic.csproj" />
   </ItemGroup>
 
 </Project>

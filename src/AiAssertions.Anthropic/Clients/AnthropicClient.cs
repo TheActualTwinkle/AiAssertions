@@ -31,6 +31,14 @@ internal sealed class AnthropicClient : IToolCallingClient
     }
 
     /// <inheritdoc />
+    public AiModelRequestMetadata RequestMetadata => new()
+    {
+        Provider = "Anthropic",
+        RequestedModel = GetModelId(_options.Model),
+        Temperature = _options.Temperature
+    };
+
+    /// <inheritdoc />
     public async Task<AiTextResponse> GetResponseAsync(AiTextRequest request, CancellationToken cancellationToken = default)
     {
         var body = CreateRequestBody(request.Messages, tools: null);
@@ -38,7 +46,8 @@ internal sealed class AnthropicClient : IToolCallingClient
 
         return new AiTextResponse
         {
-            Content = ExtractText(json)
+            Content = ExtractText(json),
+            Metadata = CreateResponseMetadata(json)
         };
     }
 
@@ -52,9 +61,49 @@ internal sealed class AnthropicClient : IToolCallingClient
         return new AiToolResponse
         {
             Content = calls.Count == 0 ? ExtractText(json) : null,
-            ToolCalls = calls
+            ToolCalls = calls,
+            Metadata = CreateResponseMetadata(json)
         };
     }
+
+    private AiModelResponseMetadata CreateResponseMetadata(JsonNode json)
+    {
+        var requestMetadata = RequestMetadata;
+        var usage = json["usage"];
+        var cacheCreationTokens = GetTokenCount(usage?["cache_creation_input_tokens"]);
+        var cacheReadTokens = GetTokenCount(usage?["cache_read_input_tokens"]);
+        var promptTokens = SumTokenCounts(
+            GetTokenCount(usage?["input_tokens"]),
+            cacheCreationTokens,
+            cacheReadTokens);
+        var completionTokens = GetTokenCount(usage?["output_tokens"]);
+
+        return new AiModelResponseMetadata
+        {
+            Provider = requestMetadata.Provider,
+            RequestedModel = requestMetadata.RequestedModel,
+            ResponseModel = json["model"]?.GetValue<string>(),
+            Temperature = requestMetadata.Temperature,
+            FinishReason = json["stop_reason"]?.GetValue<string>(),
+            Usage = usage is null
+                ? null
+                : new AiTokenUsage
+                {
+                    PromptTokens = promptTokens,
+                    CompletionTokens = completionTokens,
+                    TotalTokens = SumTokenCounts(promptTokens, completionTokens),
+                    CachedTokens = cacheReadTokens
+                }
+        };
+    }
+
+    private static long? GetTokenCount(JsonNode? value) =>
+        value?.GetValue<long>();
+
+    private static long? SumTokenCounts(params long?[] values) =>
+        values.Any(value => value.HasValue)
+            ? values.Sum(value => value.GetValueOrDefault())
+            : null;
 
     private JsonObject CreateRequestBody(IReadOnlyList<AiChatMessage> messages, JsonArray? tools)
     {

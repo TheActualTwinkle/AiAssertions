@@ -13,6 +13,11 @@ public sealed record CodebaseAssertionCompactionModelExchangeTraceEntry : Codeba
     public required AiTextRequest Request { get; init; }
 
     /// <summary>
+    /// Gets the model configuration recorded before the request was sent, when supplied by the client.
+    /// </summary>
+    public AiModelRequestMetadata? RequestMetadata { get; init; }
+
+    /// <summary>
     /// Gets the response returned by the model, or <see langword="null"/> when the exchange failed.
     /// </summary>
     public AiTextResponse? Response { get; init; }

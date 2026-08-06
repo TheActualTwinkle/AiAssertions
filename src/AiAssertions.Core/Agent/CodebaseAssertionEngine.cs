@@ -45,6 +45,7 @@ internal sealed class CodebaseAssertionEngine
                                                 "confidence" must be a JSON number from 0.0 to 1.0 inclusive, where 0.0 means no confidence and 1.0 means complete confidence in the verdict.
                                                 "reason" must be a concise summary of the evidence and reasoning behind the verdict with max 150 characters.
                                                 "evidence" must contain only concrete code evidence with exact file paths (relative to codebase root) and one-based line ranges.
+                                                Every evidence line range must directly contain all code supporting its description. If a description relies on code from separate ranges or files, split it into multiple evidence entries.
                                                 "missing_evidence" must describe relevant evidence that was expected or needed but not found.
                                                 If any of this rules are violated, the verdict will be considered invalid and the assertion will fail.
 
@@ -121,17 +122,6 @@ internal sealed class CodebaseAssertionEngine
         if (traceRecorder is null)
             return result;
 
-        traceRecorder.Record(
-            AiAssertionExecutionTraceEntryKind.RunCompleted,
-            "assertion",
-            new
-            {
-                result.Passed,
-                result.Confidence,
-                result.IsConclusive,
-                result.Reason
-            });
-
         return result with { ExecutionTrace = traceRecorder.Snapshot() };
     }
 
@@ -200,15 +190,15 @@ internal sealed class CodebaseAssertionEngine
                         semantic_summary = conversationCheckpoint.SemanticSummary
                     });
 
-            var response = await client
-                .GetToolResponseAsync(
-                    new AiToolRequest
-                    {
-                        Messages = requestMessages,
-                        Tools = _toolDefinitions
-                    }, cancellationToken)
-                .WaitAsync(cancellationToken)
-                .ConfigureAwait(false);
+            var responseTask = client.GetToolResponseAsync(
+                new AiToolRequest
+                {
+                    Messages = requestMessages,
+                    Tools = _toolDefinitions
+                }, cancellationToken);
+            var response = traceRecorder is null
+                ? await responseTask.WaitAsync(cancellationToken).ConfigureAwait(false)
+                : await responseTask.ConfigureAwait(false);
 
             if (response.ToolCalls.Count == 0)
             {
@@ -224,6 +214,17 @@ internal sealed class CodebaseAssertionEngine
                     };
 
                 var result = AssertionJson.ParseVerdict(response.Content);
+
+                traceRecorder?.Record(
+                    AiAssertionExecutionTraceEntryKind.ModelVerdictReceived,
+                    "model_verdict",
+                    new
+                    {
+                        result.Passed,
+                        result.Confidence,
+                        result.IsConclusive,
+                        result.Reason
+                    });
 
                 return result;
             }

@@ -119,6 +119,8 @@ public sealed class CodebaseAssertionEngineTests
         prompt.Should().Contain("continue with next_offset or next_start_line while has_more is true");
         prompt.Should().Contain("Do not repeat exact completed calls recorded in its coverage ledger");
         prompt.Should().Contain("\"confidence\" must be a JSON number from 0.0 to 1.0 inclusive");
+        prompt.Should().Contain("Every evidence line range must directly contain all code supporting its description");
+        prompt.Should().Contain("split it into multiple evidence entries");
         prompt.Should().Contain("no more than 4");
     }
 
@@ -147,7 +149,9 @@ public sealed class CodebaseAssertionEngineTests
             AiAssertionExecutionTraceEntryKind.ModelExchange,
             AiAssertionExecutionTraceEntryKind.ToolExecution,
             AiAssertionExecutionTraceEntryKind.ModelExchange,
-            AiAssertionExecutionTraceEntryKind.RunCompleted);
+            AiAssertionExecutionTraceEntryKind.ModelVerdictReceived);
+        result.ExecutionTrace.Entries.Select(entry => entry.Sequence).Should()
+            .Equal(Enumerable.Range(1, result.ExecutionTrace.Entries.Count));
 
         var toolEntry = result.ExecutionTrace.Entries.Single(
             entry => entry.Kind == AiAssertionExecutionTraceEntryKind.ToolExecution);
@@ -168,6 +172,19 @@ public sealed class CodebaseAssertionEngineTests
             .GetString()
             .Should()
             .Contain("\"passed\":true");
+        finalExchange.RootElement
+            .GetProperty("response")
+            .GetProperty("metadata")
+            .GetProperty("temperature")
+            .GetDouble()
+            .Should()
+            .Be(0.25);
+        finalExchange.RootElement
+            .GetProperty("requestMetadata")
+            .GetProperty("requestedModel")
+            .GetString()
+            .Should()
+            .Be("test-model");
     }
 
     [Fact]
@@ -216,7 +233,7 @@ public sealed class CodebaseAssertionEngineTests
     }
 
     [Fact]
-    public async Task EvaluateAsync_WhenExecutionTraceIsEnabledAndRunTimesOut_ShouldReturnCompletedTrace()
+    public async Task EvaluateAsync_WhenExecutionTraceIsEnabledAndRunTimesOut_ShouldReturnTraceWithoutModelVerdict()
     {
         using var directory = new EngineTestTemporaryDirectory();
         var engine = new CodebaseAssertionEngine(
@@ -231,9 +248,13 @@ public sealed class CodebaseAssertionEngineTests
         var result = await engine.EvaluateAsync("requirement");
 
         result.ExecutionTrace.Should().NotBeNull();
-        result.ExecutionTrace!.Entries.Should().ContainSingle(
-            entry => entry.Kind == AiAssertionExecutionTraceEntryKind.RunCompleted);
-        result.ExecutionTrace.Entries[^1].PayloadJson.Should().Contain("Timed out");
+        result.ExecutionTrace!.Entries.Should().NotContain(
+            entry => entry.Kind == AiAssertionExecutionTraceEntryKind.ModelVerdictReceived);
+        var failedExchange = result.ExecutionTrace.Entries.Should().ContainSingle(
+            entry => entry.Kind == AiAssertionExecutionTraceEntryKind.ModelExchange).Subject;
+        failedExchange.PayloadJson.Should().Contain("hanging-model");
+        failedExchange.PayloadJson.Should().Contain(nameof(TaskCanceledException));
+        result.Reason.Should().Contain("Timed out");
     }
 
     private static AiToolResponse ToolResponse(
@@ -258,7 +279,21 @@ public sealed class CodebaseAssertionEngineTests
         new()
         {
             Content = """{"passed":true,"confidence":1,"is_conclusive":true,"reason":"ok","evidence":[],"missing_evidence":[]}""",
-            ToolCalls = []
+            ToolCalls = [],
+            Metadata = new AiModelResponseMetadata
+            {
+                Provider = "Test",
+                RequestedModel = "test-model",
+                ResponseModel = "test-model-2026-08-06",
+                Temperature = 0.25,
+                FinishReason = "stop",
+                Usage = new AiTokenUsage
+                {
+                    PromptTokens = 100,
+                    CompletionTokens = 20,
+                    TotalTokens = 120
+                }
+            }
         };
 
 }
