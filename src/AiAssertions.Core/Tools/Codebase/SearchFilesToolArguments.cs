@@ -13,6 +13,9 @@ internal sealed class SearchFilesToolArguments
     [JsonPropertyName("glob")]
     public string? Glob { get; init; }
 
+    [JsonPropertyName("include_ignored")]
+    public bool IncludeIgnored { get; init; }
+
     [JsonPropertyName("max_results")]
     public int? MaxResults { get; init; }
 

@@ -33,7 +33,7 @@ public sealed class CodebaseToolsTests
     }
 
     [Fact]
-    public async Task FileTools_WhenRepositoryContainsIgnoredFiles_ShouldUseSharedFilteredIndex()
+    public async Task FileTools_WhenRepositoryContainsGitIgnoredFiles_ShouldRequireExplicitDiscoveryOptIn()
     {
         using var directory = new CodebaseToolsTestTemporaryDirectory();
         Directory.CreateDirectory(directory.File("src"));
@@ -42,7 +42,7 @@ public sealed class CodebaseToolsTests
         await File.WriteAllTextAsync(directory.File(".gitignore"), "ignored/\n*.secret\n!important.secret\n");
         await File.WriteAllTextAsync(directory.File("src/App.csproj"), "<Project />");
         await File.WriteAllTextAsync(directory.File("src/keep.txt"), "keep");
-        await File.WriteAllTextAsync(directory.File("ignored/skip.txt"), "skip");
+        await File.WriteAllTextAsync(directory.File("ignored/skip.txt"), "ignored needle");
         await File.WriteAllTextAsync(directory.File(".idea/shelf.txt"), "shelf");
         await File.WriteAllTextAsync(directory.File("hidden.secret"), "hidden");
         await File.WriteAllTextAsync(directory.File("important.secret"), "important");
@@ -51,19 +51,41 @@ public sealed class CodebaseToolsTests
         var filesJson = await new SearchFilesTool().ExecuteAsync(
             """{"max_results":50}""",
             context);
+        var filesIncludingIgnoredJson = await new SearchFilesTool().ExecuteAsync(
+            """{"max_results":50,"include_ignored":true}""",
+            context);
         var projectsJson = await new ListProjectsTool().ExecuteAsync("{}", context);
         var findJson = await new FindFilesByNameTool().ExecuteAsync(
-            """{"name":"keep"}""",
+            """{"name":"skip"}""",
+            context);
+        var findIncludingIgnoredJson = await new FindFilesByNameTool().ExecuteAsync(
+            """{"name":"skip","include_ignored":true}""",
+            context);
+        var textJson = await new SearchTextTool().ExecuteAsync(
+            """{"query":"ignored needle"}""",
+            context);
+        var textIncludingIgnoredJson = await new SearchTextTool().ExecuteAsync(
+            """{"query":"ignored needle","include_ignored":true}""",
+            context);
+        var readJson = await new ReadFileTool().ExecuteAsync(
+            """{"path":"ignored/skip.txt"}""",
             context);
 
         filesJson.Should().Contain("src/App.csproj");
         filesJson.Should().Contain("src/keep.txt");
         filesJson.Should().Contain("important.secret");
         filesJson.Should().NotContain("ignored/skip.txt");
-        filesJson.Should().NotContain("shelf.txt");
         filesJson.Should().NotContain("hidden.secret");
+        filesJson.Should().NotContain("shelf.txt");
+        filesIncludingIgnoredJson.Should().Contain("ignored/skip.txt");
+        filesIncludingIgnoredJson.Should().Contain("hidden.secret");
+        filesIncludingIgnoredJson.Should().NotContain("shelf.txt");
         projectsJson.Should().Contain("src/App.csproj");
-        findJson.Should().Contain("src/keep.txt");
+        findJson.Should().NotContain("ignored/skip.txt");
+        findIncludingIgnoredJson.Should().Contain("ignored/skip.txt");
+        textJson.Should().NotContain("ignored/skip.txt");
+        textIncludingIgnoredJson.Should().Contain("ignored/skip.txt");
+        readJson.Should().Contain("ignored needle");
     }
 
     [Fact]
@@ -192,7 +214,7 @@ public sealed class CodebaseToolsTests
     }
 
     [Fact]
-    public async Task FileIndex_WhenNestedGitIgnoreExists_ShouldApplyItRelativeToItsDirectory()
+    public async Task FileIndex_WhenNestedGitIgnoreExists_ShouldExposeMatchingFilesOnlyWithOptIn()
     {
         using var directory = new CodebaseToolsTestTemporaryDirectory();
         Directory.CreateDirectory(directory.File("src/generated"));
@@ -208,6 +230,9 @@ public sealed class CodebaseToolsTests
         var json = await new SearchFilesTool().ExecuteAsync(
             """{"max_results":50}""",
             context);
+        var includingIgnoredJson = await new SearchFilesTool().ExecuteAsync(
+            """{"max_results":50,"include_ignored":true}""",
+            context);
 
         json.Should().Contain("src/visible.txt");
         json.Should().Contain("src/cache");
@@ -215,6 +240,9 @@ public sealed class CodebaseToolsTests
         json.Should().NotContain("src/generated/hidden.txt");
         json.Should().NotContain("src/hidden.tmp");
         json.Should().NotContain("src/file7.log");
+        includingIgnoredJson.Should().Contain("src/generated/hidden.txt");
+        includingIgnoredJson.Should().Contain("src/hidden.tmp");
+        includingIgnoredJson.Should().Contain("src/file7.log");
     }
 
     [Fact]

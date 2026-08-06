@@ -8,9 +8,9 @@ internal sealed class SearchTextTool : JsonTool<SearchTextToolArguments>
 {
     public override string Name => "search_text";
 
-    public override string Description => "Searches literal text by default and returns a page of matching paths, lines, and bounded snippets. Set use_regex=true only for regular expressions. Use next_offset while has_more is true.";
+    public override string Description => "Searches literal text by default and returns a page of matching paths, lines, and bounded snippets. Files matched by .gitignore are excluded by default; set include_ignored=true only when they are explicitly relevant. Set use_regex=true only for regular expressions. Use next_offset while has_more is true.";
 
-    public override string ParametersJsonSchema => """{"type":"object","required":["query"],"properties":{"root":{"type":"string"},"query":{"type":"string","description":"Literal text unless use_regex is true."},"extension":{"type":"string","description":"Optional extension such as .cs"},"path":{"type":"string","description":"Optional relative file or directory to search within."},"glob":{"type":"string","description":"Optional path glob such as Source/**/*.cs"},"use_regex":{"type":"boolean","description":"Treat query as a .NET regular expression. Defaults to false."},"max_results":{"type":"integer"},"offset":{"type":"integer","description":"Zero-based match offset. Use next_offset from the previous response."}}}""";
+    public override string ParametersJsonSchema => """{"type":"object","required":["query"],"properties":{"root":{"type":"string"},"query":{"type":"string","description":"Literal text unless use_regex is true."},"extension":{"type":"string","description":"Optional extension such as .cs"},"path":{"type":"string","description":"Optional relative file or directory to search within."},"glob":{"type":"string","description":"Optional path glob such as Source/**/*.cs"},"use_regex":{"type":"boolean","description":"Treat query as a .NET regular expression. Defaults to false."},"include_ignored":{"type":"boolean","description":"Include files matched by .gitignore. Defaults to false; enable only for targeted searches when ignored files are explicitly relevant."},"max_results":{"type":"integer"},"offset":{"type":"integer","description":"Zero-based match offset. Use next_offset from the previous response."}}}""";
 
     protected override async ValueTask<object> ExecuteAsync(SearchTextToolArguments arguments, ToolExecutionContext context, CancellationToken cancellationToken)
     {
@@ -27,6 +27,12 @@ internal sealed class SearchTextTool : JsonTool<SearchTextToolArguments>
         var regex = arguments.UseRegex
             ? new Regex(arguments.Query, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250))
             : null;
+        var indexedFiles = await context.FileIndex
+            .GetFilesAsync(root, cancellationToken, arguments.IncludeIgnored)
+            .ConfigureAwait(false);
+        var indexedRelativePaths = indexedFiles
+            .Select(file => Path.GetRelativePath(root, file))
+            .ToHashSet(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         var ripgrepMatches = arguments.UseRegex
             ? null
             : await RipgrepTextSearch.TrySearchAsync(
@@ -36,14 +42,14 @@ internal sealed class SearchTextTool : JsonTool<SearchTextToolArguments>
                     arguments.Path,
                     arguments.Glob,
                     requestedMatches,
-                    cancellationToken)
+                    cancellationToken,
+                    indexedRelativePaths)
                 .ConfigureAwait(false);
 
         if (ripgrepMatches is not null)
             return CreateResult(ripgrepMatches, offset, max);
 
         var scopedPath = ResolveScopedPath(root, arguments.Path);
-        var indexedFiles = await context.FileIndex.GetFilesAsync(root, cancellationToken).ConfigureAwait(false);
 
         foreach (var file in indexedFiles)
         {

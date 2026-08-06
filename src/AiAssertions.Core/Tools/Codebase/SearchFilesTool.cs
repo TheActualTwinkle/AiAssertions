@@ -6,9 +6,9 @@ internal sealed class SearchFilesTool : JsonTool<SearchFilesToolArguments>
 {
     public override string Name => "search_files";
 
-    public override string Description => "Lists a page of files under a root, optionally filtered by extension or glob. Use next_offset while has_more is true to inspect every result.";
+    public override string Description => "Lists a page of files under a root, optionally filtered by extension or glob. Files matched by .gitignore are excluded by default; set include_ignored=true only when they are explicitly relevant. Use next_offset while has_more is true to inspect every result.";
 
-    public override string ParametersJsonSchema => """{"type":"object","properties":{"root":{"type":"string"},"extension":{"type":"string","description":"Optional extension such as .cs"},"glob":{"type":"string","description":"Optional path glob such as Source/**/*.cs"},"max_results":{"type":"integer"},"offset":{"type":"integer","description":"Zero-based result offset. Use next_offset from the previous response."}}}""";
+    public override string ParametersJsonSchema => """{"type":"object","properties":{"root":{"type":"string"},"extension":{"type":"string","description":"Optional extension such as .cs"},"glob":{"type":"string","description":"Optional path glob such as Source/**/*.cs"},"include_ignored":{"type":"boolean","description":"Include files matched by .gitignore. Defaults to false; enable only for targeted searches when ignored files are explicitly relevant."},"max_results":{"type":"integer"},"offset":{"type":"integer","description":"Zero-based result offset. Use next_offset from the previous response."}}}""";
 
     protected override async ValueTask<object> ExecuteAsync(SearchFilesToolArguments arguments, ToolExecutionContext context, CancellationToken cancellationToken)
     {
@@ -18,7 +18,7 @@ internal sealed class SearchFilesTool : JsonTool<SearchFilesToolArguments>
         if (offset < 0)
             throw new ArgumentOutOfRangeException(nameof(arguments.Offset), "Result offset must not be negative.");
 
-        var indexedFiles = await context.FileIndex.GetFilesAsync(root, cancellationToken).ConfigureAwait(false);
+        var indexedFiles = await context.FileIndex.GetFilesAsync(root, cancellationToken, arguments.IncludeIgnored).ConfigureAwait(false);
         var page = indexedFiles
             .Where(path => PathExtensionMatcher.Matches(path, arguments.Extension))
             .Select(path => Path.GetRelativePath(root, path))

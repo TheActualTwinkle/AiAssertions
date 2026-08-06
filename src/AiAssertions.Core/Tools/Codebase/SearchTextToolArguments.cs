@@ -22,6 +22,9 @@ internal sealed class SearchTextToolArguments
     [JsonPropertyName("use_regex")]
     public bool UseRegex { get; init; }
 
+    [JsonPropertyName("include_ignored")]
+    public bool IncludeIgnored { get; init; }
+
     [JsonPropertyName("max_results")]
     public int? MaxResults { get; init; }
 

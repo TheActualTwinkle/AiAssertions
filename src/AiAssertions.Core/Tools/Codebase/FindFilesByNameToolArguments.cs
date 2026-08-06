@@ -10,6 +10,9 @@ internal sealed class FindFilesByNameToolArguments
     [JsonPropertyName("name")]
     public string? Name { get; init; }
 
+    [JsonPropertyName("include_ignored")]
+    public bool IncludeIgnored { get; init; }
+
     [JsonPropertyName("max_results")]
     public int? MaxResults { get; init; }
 

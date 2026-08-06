@@ -14,6 +14,7 @@ internal static class RipgrepTextSearch
         string? glob,
         int maxResults,
         CancellationToken cancellationToken,
+        IReadOnlySet<string>? allowedFiles = null,
         string executable = "rg")
     {
         using var process = CreateProcess(root, query, path, executable);
@@ -37,6 +38,7 @@ internal static class RipgrepTextSearch
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (TryParseMatch(root, query, line, out var match)
+                    && allowedFiles?.Contains(match.File) != false
                     && PathExtensionMatcher.Matches(match.File, extension)
                     && PathGlobMatcher.Matches(match.File, glob))
                     matches.Add(match);
@@ -81,6 +83,7 @@ internal static class RipgrepTextSearch
         process.StartInfo.ArgumentList.Add("--json");
         process.StartInfo.ArgumentList.Add("--ignore-case");
         process.StartInfo.ArgumentList.Add("--hidden");
+        process.StartInfo.ArgumentList.Add("--no-ignore");
         process.StartInfo.ArgumentList.Add("--no-messages");
         process.StartInfo.ArgumentList.Add("--fixed-strings");
         process.StartInfo.ArgumentList.Add("--sort");

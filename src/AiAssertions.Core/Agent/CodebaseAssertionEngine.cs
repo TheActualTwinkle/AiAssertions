@@ -28,6 +28,8 @@ internal sealed class CodebaseAssertionEngine
                                                 Stop gathering evidence as soon as the verdict is logically conclusive, but not before.
                                                 Never claim that runtime behavior was verified unless a tool actually executed it or concrete code evidence proves it. Distinguish static evidence from executed behavior.
                                                 Do not call list_projects or search_files when the relevant files are already present in pre-included evidence.
+                                                Keep discovery queries narrow and relevant to minimize noise and token usage. Discovery tools exclude paths matched by .gitignore by default, but read_file can read an explicitly named ignored file. 
+                                                When relevant evidence or documentation provides an exact path, call read_file directly even if discovery did not return it. Use include_ignored=true only for a targeted search when ignored files are explicitly relevant and the exact path is unknown.
 
                                                 Batch up to 4 independent tool calls when necessary.
                                                 If you know several files, names, or searches that are all needed, request no more than 4 of those tool calls in the same assistant turn.

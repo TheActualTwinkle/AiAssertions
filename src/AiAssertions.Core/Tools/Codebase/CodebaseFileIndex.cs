@@ -6,13 +6,17 @@ namespace AiAssertions.Core.Tools.Codebase;
 internal sealed class CodebaseFileIndex
 {
     private readonly string _root;
-    private readonly object _syncRoot = new();
+    private readonly Lock _syncRoot = new();
     private Task<IReadOnlyList<string>>? _files;
+    private Task<IReadOnlyList<string>>? _filesIncludingIgnored;
 
     internal CodebaseFileIndex(string root) =>
         _root = Path.GetFullPath(root);
 
-    internal async Task<IReadOnlyList<string>> GetFilesAsync(string requestedRoot, CancellationToken cancellationToken)
+    internal async Task<IReadOnlyList<string>> GetFilesAsync(
+        string requestedRoot,
+        CancellationToken cancellationToken,
+        bool includeIgnored = false)
     {
         var root = Path.GetFullPath(requestedRoot);
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
@@ -23,7 +27,9 @@ internal sealed class CodebaseFileIndex
 
         Task<IReadOnlyList<string>> files;
         lock (_syncRoot)
-            files = _files ??= BuildAsync(cancellationToken);
+            files = includeIgnored
+                ? _filesIncludingIgnored ??= BuildAsync(includeIgnored: true, cancellationToken)
+                : _files ??= BuildAsync(includeIgnored: false, cancellationToken);
 
         try
         {
@@ -39,20 +45,27 @@ internal sealed class CodebaseFileIndex
         {
             if (files.IsCanceled || files.IsFaulted)
                 lock (_syncRoot)
-                    if (ReferenceEquals(_files, files))
+                    if (includeIgnored)
+                    {
+                        if (ReferenceEquals(_filesIncludingIgnored, files))
+                            _filesIncludingIgnored = null;
+                    }
+                    else if (ReferenceEquals(_files, files))
+                    {
                         _files = null;
+                    }
 
             throw;
         }
     }
 
-    private async Task<IReadOnlyList<string>> BuildAsync(CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<string>> BuildAsync(bool includeIgnored, CancellationToken cancellationToken)
     {
-        var gitFiles = await TryReadGitFilesAsync(cancellationToken).ConfigureAwait(false);
+        var gitFiles = await TryReadGitFilesAsync(includeIgnored, cancellationToken).ConfigureAwait(false);
         if (gitFiles is not null)
             return gitFiles;
 
-        var gitIgnore = GitIgnoreMatcher.Load(_root);
+        var gitIgnore = includeIgnored ? null : GitIgnoreMatcher.Load(_root);
         var files = new List<string>();
         var options = new EnumerationOptions
         {
@@ -67,7 +80,7 @@ internal sealed class CodebaseFileIndex
             cancellationToken.ThrowIfCancellationRequested();
 
             var relativePath = Path.GetRelativePath(_root, path);
-            if (!PathSafety.IsIgnoredPath(relativePath) && !gitIgnore.IsIgnored(relativePath))
+            if (!PathSafety.IsIgnoredPath(relativePath) && gitIgnore?.IsIgnored(relativePath) != true)
                 files.Add(Path.GetFullPath(path));
         }
 
@@ -75,7 +88,9 @@ internal sealed class CodebaseFileIndex
         return files;
     }
 
-    private async Task<IReadOnlyList<string>?> TryReadGitFilesAsync(CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<string>?> TryReadGitFilesAsync(
+        bool includeIgnored,
+        CancellationToken cancellationToken)
     {
         if (!Directory.Exists(Path.Combine(_root, ".git")) && !File.Exists(Path.Combine(_root, ".git")))
             return null;
@@ -88,7 +103,7 @@ internal sealed class CodebaseFileIndex
             return null;
 
         var untrackedFiles = await TryRunGitLsFilesAsync(
-                ["--others", "--exclude-standard", "-z"],
+                includeIgnored ? ["--others", "-z"] : ["--others", "--exclude-standard", "-z"],
                 cancellationToken)
             .ConfigureAwait(false);
         if (untrackedFiles is null)
