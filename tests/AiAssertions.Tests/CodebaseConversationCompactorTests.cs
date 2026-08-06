@@ -96,7 +96,7 @@ public sealed class CodebaseConversationCompactorTests
         var result = await BuildAdaptive(messages, client, new CodebaseConversationCheckpoint());
 
         var state = result.Single(message => message.Role == "user" && message.Content.Contains("checkpoint revision", StringComparison.Ordinal));
-        state.Content.Split("read_file {", StringSplitOptions.None).Should().HaveCount(2);
+        state.Content.Split("read_file {").Should().HaveCount(2);
         state.Content.Should().Contain("repeated 2 times");
     }
 

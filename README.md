@@ -53,6 +53,7 @@ AiAssert
     .WithDefaultTimeout(TimeSpan.FromMinutes(1)) // Optional: override default timeout for all assertions.
     .WithDefaultMaxToolIterations(10) // Optional: override the default tool-calling iteration limit.
     .WithGlobalApproximateTokenLimit(32_000) // Optional: limit conversation tokens for all assertions.
+    .WithGlobalExecutionTrace() // Optional: collect model, tool, compaction, and timing diagnostics.
     .WithGlobalAdditionalSystemPrompt("Prefer direct code evidence over inference.")
     // Confedence tolerance is a threshold for the model's confidence in its verdict. 
     // If the model returns a confidence below this threshold, the assertion fails.
@@ -62,6 +63,7 @@ var result = await AiAssert
     .OnCodebase()
     .WithTimeout(TimeSpan.FromMinutes(1)) // Optional: override default timeout for this concrete assertion.
     .WithMaxToolIterations(300) // Optional: override default tool-calling iteration limit for this assertion.
+    .WithExecutionTrace() // Optional: expose the complete run trace on the result.
     .IncludeDirectory("SampleCode/Security") // Optional: include directory as initial evidence for the model.
     .That("Business requirement in natural language.");
 

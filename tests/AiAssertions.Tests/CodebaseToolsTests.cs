@@ -336,7 +336,7 @@ public sealed class CodebaseToolsTests
         var match = search.RootElement.GetProperty("matches")[0];
         var matchText = match.GetProperty("text").GetString();
         matchText.Should().Contain("needle-at-the-end");
-        matchText!.Length.Should().BeLessThanOrEqualTo(500);
+        matchText.Length.Should().BeLessThanOrEqualTo(500);
         match.GetProperty("text_truncated").GetBoolean().Should().BeTrue();
         read.RootElement.GetProperty("content").GetString()!.Length.Should().BeLessThan(1_100);
         read.RootElement.GetProperty("content_truncated").GetBoolean().Should().BeTrue();

@@ -6,9 +6,9 @@ public class DeepSeekTests
 {
     public DeepSeekTests()
     {
-        var apiKey = Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY")
-                     ?? throw new InvalidOperationException("Set DEEPSEEK_API_KEY before running DeepSeek sample tests.");
-        
+        // var apiKey = Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY")
+                     // ?? throw new InvalidOperationException("Set DEEPSEEK_API_KEY before running DeepSeek sample tests.");
+                     var apiKey = "sk-c65dabf6a4134b42bc41325a62d94681";
         AiAssert
             .Configure(
                 DeepSeekClientFactory.Create(
@@ -18,6 +18,7 @@ public class DeepSeekTests
                         Model = DeepSeekModel.V4Pro
                     }))
             .WithDefaultTimeout(TimeSpan.FromMinutes(3))
+            .WithGlobalExecutionTrace()
             .WithGlobalConfidenceTolerance(0.75);
     }
 

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AiAssertions.Core.Abstractions;
 using AiAssertions.Core.Models;
 using FluentAssertions;
@@ -198,6 +199,58 @@ public sealed class CodebaseAssertionConfigurationTests
         await CreateAssertion(client, defaults).That("requirement");
 
         estimatorCalls.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task WithExecutionTrace_ShouldExposePublicExecutionTraceOnResult()
+    {
+        var client = new RecordingToolCallingClient(ToolCallResponse("call-1"), VerdictResponse());
+
+        var result = await CreateAssertion(client)
+            .WithExecutionTrace()
+            .That("requirement");
+
+        result.ExecutionTrace.Should().NotBeNull();
+        result.ExecutionTrace!.Entries.Should().HaveCount(4);
+
+        var firstExchange = result.ExecutionTrace.Entries[0]
+            .Should().BeOfType<CodebaseAssertionModelExchangeTraceEntry>().Subject;
+        firstExchange.Request.Messages.Should().Contain(message => message.Content.Contains("requirement"));
+        firstExchange.Response!.ToolCalls.Should().ContainSingle(call => call.Id == "call-1");
+        firstExchange.Error.Should().BeNull();
+
+        var toolExecution = result.ExecutionTrace.Entries[1]
+            .Should().BeOfType<CodebaseAssertionToolExecutionTraceEntry>().Subject;
+        toolExecution.ToolCallId.Should().Be("call-1");
+        toolExecution.ToolName.Should().Be("list_projects");
+        toolExecution.Arguments.ValueKind.Should().Be(JsonValueKind.Object);
+        toolExecution.Result.Should().NotBeNull();
+        toolExecution.CacheHit.Should().BeFalse();
+        toolExecution.Error.Should().BeNull();
+
+        result.ExecutionTrace.Entries[2].Should().BeOfType<CodebaseAssertionModelExchangeTraceEntry>();
+        var completed = result.ExecutionTrace.Entries[3]
+            .Should().BeOfType<CodebaseAssertionRunCompletedTraceEntry>().Subject;
+        completed.Passed.Should().BeTrue();
+        completed.IsConclusive.Should().BeTrue();
+
+        var json = result.ExecutionTrace.ToJson();
+        json.Should().Contain("\"kind\": \"modelExchange\"");
+        json.Should().Contain("\"kind\": \"toolExecution\"");
+        json.Should().Contain("requirement");
+        json.Should().NotContain("\"payload\"");
+        json.Should().NotContain("payloadJson");
+    }
+
+    [Fact]
+    public async Task CodebaseAssertion_WhenGlobalExecutionTraceIsEnabled_ShouldCaptureTrace()
+    {
+        var client = new RecordingToolCallingClient(VerdictResponse());
+        var defaults = new AiAssertDefaults { ExecutionTraceEnabled = true };
+
+        var result = await CreateAssertion(client, defaults).That("requirement");
+
+        result.ExecutionTrace.Should().NotBeNull();
     }
 
     private static CodebaseAssertion CreateAssertion(

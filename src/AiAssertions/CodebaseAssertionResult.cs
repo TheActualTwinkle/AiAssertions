@@ -29,4 +29,14 @@ public sealed record CodebaseAssertionResult
     /// Gets evidence that was expected or needed but not found by the model.
     /// </summary>
     public required IReadOnlyList<CodebaseAssertionMissingEvidence> MissingEvidence { get; init; }
+
+    /// <summary>
+    /// Gets the optional execution trace collected for this assertion run.
+    /// </summary>
+    /// <remarks>
+    /// The trace is available when collection was enabled with <see cref="CodebaseAssertion.WithExecutionTrace"/> or
+    /// <see cref="AiAssertConfiguration.WithGlobalExecutionTrace"/>. It can contain prompts, source code, tool results,
+    /// and provider errors.
+    /// </remarks>
+    public CodebaseAssertionExecutionTrace? ExecutionTrace { get; init; }
 }

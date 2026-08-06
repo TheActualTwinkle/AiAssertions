@@ -30,6 +30,8 @@ internal sealed class CodebaseAssertionOptions
 
     public double MinimumFalseConfidence { get; init; }
 
+    public bool ExecutionTraceEnabled { get; init; }
+
     public IReadOnlyList<string> IncludedPaths { get; init; } = [];
 
     public IReadOnlyList<string> IncludedTypes { get; init; } = [];

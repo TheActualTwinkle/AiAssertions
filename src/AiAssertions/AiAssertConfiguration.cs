@@ -182,6 +182,24 @@ public sealed class AiAssertConfiguration
     }
 
     /// <summary>
+    /// Enables collection of execution traces for subsequent codebase assertions.
+    /// </summary>
+    /// <remarks>
+    /// Trace collection is disabled by default. Enabling it may increase execution time
+    /// and memory usage.
+    /// Traces may contain sensitive codebase data.
+    /// </remarks>
+    /// <returns>The same configuration builder.</returns>
+    public AiAssertConfiguration WithGlobalExecutionTrace()
+    {
+        var defaults = _getDefaults();
+
+        _setDefaults(defaults with { ExecutionTraceEnabled = true });
+
+        return this;
+    }
+
+    /// <summary>
     /// Sets the default minimum confidence required for both passing and failing verdicts.
     /// </summary>
     /// <param name="minimumConfidence">The minimum confidence value between 0 and 1.</param>

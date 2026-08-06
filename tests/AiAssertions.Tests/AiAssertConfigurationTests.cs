@@ -22,7 +22,8 @@ public sealed class AiAssertConfigurationTests
             {
                 RecentToolCallTurns = 1,
                 MaxCheckpointChars = 8192
-            });
+            })
+            .WithGlobalExecutionTrace();
 
         var defaults = getDefaults();
         var separator = Environment.NewLine + Environment.NewLine;
@@ -35,6 +36,7 @@ public sealed class AiAssertConfigurationTests
         defaults.ConversationCompactionEnabled.Should().BeTrue();
         defaults.RecentToolCallTurns.Should().Be(1);
         defaults.MaxCompactedStateChars.Should().Be(8192);
+        defaults.ExecutionTraceEnabled.Should().BeTrue();
     }
 
     [Fact]

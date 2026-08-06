@@ -21,4 +21,7 @@ internal sealed record AiAssertionResult
 
     [JsonPropertyName("is_conclusive")]
     public bool IsConclusive { get; init; } = true;
+
+    [JsonIgnore]
+    internal AiAssertionExecutionTrace? ExecutionTrace { get; init; }
 }

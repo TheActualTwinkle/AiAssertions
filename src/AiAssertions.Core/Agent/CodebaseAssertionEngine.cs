@@ -42,6 +42,7 @@ internal sealed class CodebaseAssertionEngine
                                                 If you cannot find enough relevant code or evidence, return "is_conclusive": false, "passed": false, and explain what is missing.
                                                 Most important rule:
                                                 Never return any other text outside the JSON code block. Do not include any additional commentary or explanations.
+                                                "confidence" must be a JSON number from 0.0 to 1.0 inclusive, where 0.0 means no confidence and 1.0 means complete confidence in the verdict.
                                                 "reason" must be a concise summary of the evidence and reasoning behind the verdict with max 150 characters.
                                                 "evidence" must contain only concrete code evidence with exact file paths (relative to codebase root) and one-based line ranges.
                                                 "missing_evidence" must describe relevant evidence that was expected or needed but not found.
@@ -52,7 +53,7 @@ internal sealed class CodebaseAssertionEngine
 
                                                 THIS IS AN EXAMPLE OF A GOOD VERDICT:
                                                 ```json
-                                                {"passed":true,"confidence":1.0,"is_conclusive":true,"reason":"Password is hashed with salt before storage; no plain text stored or logged.","evidence":[{"file":"SampleCode/Security/PasswordRegistrationService.cs","start_line":12,"end_line":22,"description":"Password hash and salt are created before user registration."},{"file":"SampleCode/Security/RegisteredUser.cs","start_line":3,"end_line":8,"description":"Registered user stores only password hash and salt."}],"missing_evidence":[]}
+                                                {"passed":true,"confidence":0.93,"is_conclusive":true,"reason":"Password is hashed with salt before storage; no plain text stored or logged.","evidence":[{"file":"SampleCode/Security/PasswordRegistrationService.cs","start_line":12,"end_line":22,"description":"Password hash and salt are created before user registration."},{"file":"SampleCode/Security/RegisteredUser.cs","start_line":3,"end_line":8,"description":"Registered user stores only password hash and salt."}],"missing_evidence":[]}
                                                 ```
                                                 """;
 
@@ -84,21 +85,29 @@ internal sealed class CodebaseAssertionEngine
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(requirement);
 
+        var traceRecorder = _options.ExecutionTraceEnabled
+            ? new AiAssertionExecutionTraceRecorder()
+            : null;
+        var client = traceRecorder is null
+            ? _client
+            : new ExecutionTraceRecordingClient(_client, traceRecorder);
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         if (_options.Timeout > TimeSpan.Zero)
             timeoutCts.CancelAfter(_options.Timeout);
 
+        AiAssertionResult result;
+
         try
         {
-            return await EvaluateCoreAsync(requirement, timeoutCts.Token).ConfigureAwait(false);
+            result = await EvaluateCoreAsync(requirement, client, traceRecorder, timeoutCts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (
             !cancellationToken.IsCancellationRequested
             && _options.Timeout > TimeSpan.Zero
             && timeoutCts.IsCancellationRequested)
         {
-            return new AiAssertionResult
+            result = new AiAssertionResult
             {
                 Passed = false,
                 Confidence = 0,
@@ -108,9 +117,29 @@ internal sealed class CodebaseAssertionEngine
                 IsConclusive = false
             };
         }
+
+        if (traceRecorder is null)
+            return result;
+
+        traceRecorder.Record(
+            AiAssertionExecutionTraceEntryKind.RunCompleted,
+            "assertion",
+            new
+            {
+                result.Passed,
+                result.Confidence,
+                result.IsConclusive,
+                result.Reason
+            });
+
+        return result with { ExecutionTrace = traceRecorder.Snapshot() };
     }
 
-    private async Task<AiAssertionResult> EvaluateCoreAsync(string requirement, CancellationToken cancellationToken)
+    private async Task<AiAssertionResult> EvaluateCoreAsync(
+        string requirement,
+        IToolCallingClient client,
+        AiAssertionExecutionTraceRecorder? traceRecorder,
+        CancellationToken cancellationToken)
     {
         var workingDirectory = _options.WorkingDirectory ?? Directory.GetCurrentDirectory();
         var codebaseRoot = PathSafety.DiscoverRoot(workingDirectory);
@@ -134,10 +163,12 @@ internal sealed class CodebaseAssertionEngine
 
         for (var step = 0; step < _options.MaxToolIterations; step++)
         {
+            var compactionActivity = traceRecorder?.Begin();
+            var previousRevision = conversationCheckpoint.Revision;
             var requestMessages = await CodebaseConversationCompactor
                 .BuildRequestMessagesAsync(
                     messages,
-                    _client,
+                    client,
                     conversationCheckpoint,
                     _options.ConversationCompactionEnabled,
                     _options.RecentToolCallTurns,
@@ -147,9 +178,29 @@ internal sealed class CodebaseAssertionEngine
                     _options.RequestTokenEstimator,
                     cancellationToken)
                 .ConfigureAwait(false);
+            var compactedThroughMessageIndex = conversationCheckpoint.CompactedThroughMessageIndex;
+            var removedMessageCount = Math.Min(
+                Math.Max(compactedThroughMessageIndex - 2, 0),
+                Math.Max(messages.Count - 2, 0));
             conversationCheckpoint.PruneCompactedPrefix(messages);
 
-            var response = await _client
+            if (traceRecorder is not null
+                && compactionActivity is not null
+                && conversationCheckpoint.Revision != previousRevision)
+                traceRecorder.Complete(
+                    compactionActivity.Value,
+                    AiAssertionExecutionTraceEntryKind.ConversationCompaction,
+                    $"revision_{conversationCheckpoint.Revision}",
+                    new
+                    {
+                        iteration = step + 1,
+                        revision = conversationCheckpoint.Revision,
+                        compacted_through_message_index = compactedThroughMessageIndex,
+                        removed_message_count = removedMessageCount,
+                        semantic_summary = conversationCheckpoint.SemanticSummary
+                    });
+
+            var response = await client
                 .GetToolResponseAsync(
                     new AiToolRequest
                     {
@@ -185,18 +236,18 @@ internal sealed class CodebaseAssertionEngine
             });
 
             var toolMessages = await Task
-                .WhenAll(response.ToolCalls.Select(call => ExecuteToolCallAsync(call, context, cancellationToken)))
+                .WhenAll(response.ToolCalls.Select(call => ExecuteToolCallAsync(call, context, traceRecorder, cancellationToken)))
                 .ConfigureAwait(false);
 
             messages.AddRange(toolMessages);
         }
 
-        var transcript = new StringBuilder();
+        var recentMessages = new StringBuilder();
 
         foreach (var message in messages.TakeLast(8))
         {
-            transcript.AppendLine(message.Role);
-            transcript.AppendLine(message.Content);
+            recentMessages.AppendLine(message.Role);
+            recentMessages.AppendLine(message.Content);
         }
 
         return new AiAssertionResult
@@ -210,7 +261,7 @@ internal sealed class CodebaseAssertionEngine
                 new AiAssertionMissingEvidence
                 {
                     Description = "The model did not reach a verdict before the tool iteration limit.",
-                    ExpectedLocation = transcript.ToString()
+                    ExpectedLocation = recentMessages.ToString()
                 }
             ],
             IsConclusive = false
@@ -367,29 +418,65 @@ internal sealed class CodebaseAssertionEngine
     private async Task<AiChatMessage> ExecuteToolCallAsync(
         AiToolCall call,
         ToolExecutionContext context,
+        AiAssertionExecutionTraceRecorder? traceRecorder,
         CancellationToken cancellationToken)
     {
+        var activity = traceRecorder?.Begin();
         string content;
+        var cacheHit = false;
 
-        if (_toolsByName.TryGetValue(call.Name, out var tool))
+        try
         {
-            var cacheKey = CreateToolCacheKey(call);
-            var cachedResult = await context
-                .GetOrAddToolResultAsync(
-                    cacheKey,
-                    () => ExecuteToolAsync(tool, call.ArgumentsJson, context, cancellationToken),
-                    IsSuccessfulToolResult)
-                .WaitAsync(cancellationToken)
-                .ConfigureAwait(false);
+            if (_toolsByName.TryGetValue(call.Name, out var tool))
+            {
+                var cacheKey = CreateToolCacheKey(call);
+                var cachedResult = await context
+                    .GetOrAddToolResultAsync(
+                        cacheKey,
+                        () => ExecuteToolAsync(tool, call.ArgumentsJson, context, cancellationToken),
+                        IsSuccessfulToolResult)
+                    .WaitAsync(cancellationToken)
+                    .ConfigureAwait(false);
 
-            content = cachedResult.CacheHit
-                ? MarkToolResultAsCached(cachedResult.Content)
-                : cachedResult.Content;
+                cacheHit = cachedResult.CacheHit;
+                content = cacheHit
+                    ? MarkToolResultAsCached(cachedResult.Content)
+                    : cachedResult.Content;
+            }
+            else
+            {
+                content = JsonSerializer.Serialize(new { error = $"Unknown tool '{call.Name}'." }, AssertionJson.Options);
+            }
         }
-        else
+        catch (Exception exception)
         {
-            content = JsonSerializer.Serialize(new { error = $"Unknown tool '{call.Name}'." }, AssertionJson.Options);
+            if (traceRecorder is not null && activity is not null)
+                traceRecorder.Complete(
+                    activity.Value,
+                    AiAssertionExecutionTraceEntryKind.ToolExecution,
+                    call.Name,
+                    new
+                    {
+                        tool_call_id = call.Id,
+                        arguments = ParseTraceJson(call.ArgumentsJson),
+                        error = exception.ToString()
+                    });
+
+            throw;
         }
+
+        if (traceRecorder is not null && activity is not null)
+            traceRecorder.Complete(
+                activity.Value,
+                AiAssertionExecutionTraceEntryKind.ToolExecution,
+                call.Name,
+                new
+                {
+                    tool_call_id = call.Id,
+                    arguments = ParseTraceJson(call.ArgumentsJson),
+                    result = ParseTraceJson(content),
+                    cache_hit = cacheHit
+                });
 
         return new AiChatMessage
         {
@@ -402,6 +489,18 @@ internal sealed class CodebaseAssertionEngine
 
     private static string CreateToolCacheKey(AiToolCall call) =>
         string.Concat(call.Name, "\n", CanonicalizeJson(call.ArgumentsJson));
+
+    private static JsonNode ParseTraceJson(string json)
+    {
+        try
+        {
+            return JsonNode.Parse(json) ?? JsonValue.Create(json);
+        }
+        catch (JsonException)
+        {
+            return JsonValue.Create(json);
+        }
+    }
 
     private static bool IsSuccessfulToolResult(string content)
     {

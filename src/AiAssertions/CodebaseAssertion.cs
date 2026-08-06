@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AiAssertions.Core.Abstractions;
 using AiAssertions.Core.Agent;
 using AiAssertions.Core.Assertions;
@@ -10,6 +11,8 @@ namespace AiAssertions;
 /// </summary>
 public sealed class CodebaseAssertion
 {
+    private static readonly JsonSerializerOptions ExecutionTraceJsonOptions = new(JsonSerializerDefaults.Web);
+
     private readonly IToolCallingClient _client;
     private readonly IReadOnlyList<string> _includedPaths;
     private readonly IReadOnlyList<string> _includedTypes;
@@ -25,6 +28,7 @@ public sealed class CodebaseAssertion
     private readonly double _minimumFalseConfidence;
     private readonly double _minimumTrueConfidence;
     private readonly TimeSpan _timeout;
+    private readonly bool _executionTraceEnabled;
 
     internal CodebaseAssertion(IToolCallingClient client, AiAssertDefaults defaults)
         : this(
@@ -42,7 +46,8 @@ public sealed class CodebaseAssertion
             defaults.MaxCompactedToolResultChars,
             defaults.MaxCompactedStateChars,
             defaults.MinimumTrueConfidence,
-            defaults.MinimumFalseConfidence)
+            defaults.MinimumFalseConfidence,
+            defaults.ExecutionTraceEnabled)
     {
     }
 
@@ -61,7 +66,8 @@ public sealed class CodebaseAssertion
         int maxCompactedToolResultChars,
         int maxCompactedStateChars,
         double minimumTrueConfidence,
-        double minimumFalseConfidence)
+        double minimumFalseConfidence,
+        bool executionTraceEnabled)
     {
         _client = client;
         _includedPaths = includedPaths;
@@ -78,6 +84,7 @@ public sealed class CodebaseAssertion
         _maxCompactedStateChars = maxCompactedStateChars;
         _minimumTrueConfidence = minimumTrueConfidence;
         _minimumFalseConfidence = minimumFalseConfidence;
+        _executionTraceEnabled = executionTraceEnabled;
     }
 
     /// <summary>
@@ -192,6 +199,18 @@ public sealed class CodebaseAssertion
             recentToolCallTurns: options.RecentToolCallTurns,
             maxCompactedStateChars: options.MaxCheckpointChars);
     }
+
+    /// <summary>
+    /// Enables collection of a complete execution trace for this assertion run.
+    /// </summary>
+    /// <remarks>
+    /// Trace collection is disabled by default. Enabling it may increase execution time
+    /// and memory usage.
+    /// Traces may contain sensitive codebase data.
+    /// </remarks>
+    /// <returns>A new assertion builder with execution-trace collection enabled.</returns>
+    public CodebaseAssertion WithExecutionTrace() =>
+        Clone(executionTraceEnabled: true);
 
     /// <summary>
     /// Sets the minimum confidence required for both passing and failing verdicts.
@@ -315,7 +334,8 @@ public sealed class CodebaseAssertion
             MaxCompactedToolResultChars = _maxCompactedToolResultChars,
             MaxCompactedStateChars = _maxCompactedStateChars,
             MinimumTrueConfidence = _minimumTrueConfidence,
-            MinimumFalseConfidence = _minimumFalseConfidence
+            MinimumFalseConfidence = _minimumFalseConfidence,
+            ExecutionTraceEnabled = _executionTraceEnabled
         })
             .EvaluateAsync(requirement, cancellationToken)
             .ConfigureAwait(false);
@@ -345,7 +365,18 @@ public sealed class CodebaseAssertion
                     Description = evidence.Description,
                     ExpectedLocation = evidence.ExpectedLocation
                 })
-                .ToArray()
+                .ToArray(),
+            ExecutionTrace = result.ExecutionTrace is null
+                ? null
+                : new CodebaseAssertionExecutionTrace
+                {
+                    StartedAtUtc = result.ExecutionTrace.StartedAtUtc,
+                    CompletedAtUtc = result.ExecutionTrace.CompletedAtUtc,
+                    Duration = result.ExecutionTrace.Duration,
+                    Entries = result.ExecutionTrace.Entries
+                        .Select(ToExecutionTraceEntry)
+                        .ToArray()
+                }
         };
     }
 
@@ -390,7 +421,8 @@ public sealed class CodebaseAssertion
         int? maxCompactedToolResultChars = null,
         int? maxCompactedStateChars = null,
         double? minimumTrueConfidence = null,
-        double? minimumFalseConfidence = null) =>
+        double? minimumFalseConfidence = null,
+        bool? executionTraceEnabled = null) =>
         new(
             _client,
             includedPaths ?? _includedPaths,
@@ -406,7 +438,8 @@ public sealed class CodebaseAssertion
             maxCompactedToolResultChars ?? _maxCompactedToolResultChars,
             maxCompactedStateChars ?? _maxCompactedStateChars,
             minimumTrueConfidence ?? _minimumTrueConfidence,
-            minimumFalseConfidence ?? _minimumFalseConfidence);
+            minimumFalseConfidence ?? _minimumFalseConfidence,
+            executionTraceEnabled ?? _executionTraceEnabled);
 
     private CodebaseAssertionVerdict ToVerdict(AiAssertionResult result)
     {
@@ -422,6 +455,120 @@ public sealed class CodebaseAssertion
             ? CodebaseAssertionVerdict.Failed
             : CodebaseAssertionVerdict.NotDetermined;
     }
+
+    private static CodebaseAssertionExecutionTraceEntry ToExecutionTraceEntry(AiAssertionExecutionTraceEntry entry)
+    {
+        using var document = JsonDocument.Parse(entry.PayloadJson);
+        var payload = document.RootElement;
+
+        return entry.Kind switch
+        {
+            AiAssertionExecutionTraceEntryKind.ModelExchange => CreateModelExchangeTraceEntry(entry, payload),
+            AiAssertionExecutionTraceEntryKind.ConversationCompactionModelExchange =>
+                CreateCompactionModelExchangeTraceEntry(entry, payload),
+            AiAssertionExecutionTraceEntryKind.ConversationCompaction =>
+                CreateConversationCompactionTraceEntry(entry, payload),
+            AiAssertionExecutionTraceEntryKind.ToolExecution => CreateToolExecutionTraceEntry(entry, payload),
+            AiAssertionExecutionTraceEntryKind.RunCompleted => CreateRunCompletedTraceEntry(entry, payload),
+            _ => throw new ArgumentOutOfRangeException(nameof(entry), entry.Kind, "Unknown execution trace entry kind.")
+        };
+    }
+
+    private static CodebaseAssertionModelExchangeTraceEntry CreateModelExchangeTraceEntry(
+        AiAssertionExecutionTraceEntry entry,
+        JsonElement payload) =>
+        new()
+        {
+            Sequence = entry.Sequence,
+            StartedAtUtc = entry.StartedAtUtc,
+            Duration = entry.Duration,
+            Request = DeserializeRequiredTraceProperty<AiToolRequest>(payload, "request"),
+            Response = DeserializeOptionalTraceProperty<AiToolResponse>(payload, "response"),
+            Error = GetOptionalTraceString(payload, "error")
+        };
+
+    private static CodebaseAssertionCompactionModelExchangeTraceEntry CreateCompactionModelExchangeTraceEntry(
+        AiAssertionExecutionTraceEntry entry,
+        JsonElement payload) =>
+        new()
+        {
+            Sequence = entry.Sequence,
+            StartedAtUtc = entry.StartedAtUtc,
+            Duration = entry.Duration,
+            Request = DeserializeRequiredTraceProperty<AiTextRequest>(payload, "request"),
+            Response = DeserializeOptionalTraceProperty<AiTextResponse>(payload, "response"),
+            Error = GetOptionalTraceString(payload, "error")
+        };
+
+    private static CodebaseAssertionConversationCompactionTraceEntry CreateConversationCompactionTraceEntry(
+        AiAssertionExecutionTraceEntry entry,
+        JsonElement payload) =>
+        new()
+        {
+            Sequence = entry.Sequence,
+            StartedAtUtc = entry.StartedAtUtc,
+            Duration = entry.Duration,
+            Iteration = payload.GetProperty("iteration").GetInt32(),
+            Revision = payload.GetProperty("revision").GetInt32(),
+            CompactedThroughMessageIndex = payload.GetProperty("compacted_through_message_index").GetInt32(),
+            RemovedMessageCount = payload.GetProperty("removed_message_count").GetInt32(),
+            SemanticSummary = GetRequiredTraceString(payload, "semantic_summary")
+        };
+
+    private static CodebaseAssertionToolExecutionTraceEntry CreateToolExecutionTraceEntry(
+        AiAssertionExecutionTraceEntry entry,
+        JsonElement payload) =>
+        new()
+        {
+            Sequence = entry.Sequence,
+            StartedAtUtc = entry.StartedAtUtc,
+            Duration = entry.Duration,
+            ToolCallId = GetRequiredTraceString(payload, "tool_call_id"),
+            ToolName = entry.Name,
+            Arguments = payload.GetProperty("arguments").Clone(),
+            Result = GetOptionalTraceElement(payload, "result"),
+            CacheHit = payload.TryGetProperty("cache_hit", out var cacheHit) && cacheHit.GetBoolean(),
+            Error = GetOptionalTraceString(payload, "error")
+        };
+
+    private static CodebaseAssertionRunCompletedTraceEntry CreateRunCompletedTraceEntry(
+        AiAssertionExecutionTraceEntry entry,
+        JsonElement payload) =>
+        new()
+        {
+            Sequence = entry.Sequence,
+            StartedAtUtc = entry.StartedAtUtc,
+            Duration = entry.Duration,
+            Passed = payload.GetProperty("passed").GetBoolean(),
+            Confidence = payload.GetProperty("confidence").GetDouble(),
+            IsConclusive = payload.GetProperty("isConclusive").GetBoolean(),
+            Reason = GetRequiredTraceString(payload, "reason")
+        };
+
+    private static T DeserializeRequiredTraceProperty<T>(JsonElement payload, string propertyName)
+        where T : class =>
+        payload.GetProperty(propertyName).Deserialize<T>(ExecutionTraceJsonOptions)
+        ?? throw new JsonException($"Execution trace property '{propertyName}' was null.");
+
+    private static T? DeserializeOptionalTraceProperty<T>(JsonElement payload, string propertyName)
+        where T : class =>
+        payload.TryGetProperty(propertyName, out var value) && value.ValueKind != JsonValueKind.Null
+            ? value.Deserialize<T>(ExecutionTraceJsonOptions)
+            : null;
+
+    private static JsonElement? GetOptionalTraceElement(JsonElement payload, string propertyName) =>
+        payload.TryGetProperty(propertyName, out var value) && value.ValueKind != JsonValueKind.Null
+            ? value.Clone()
+            : null;
+
+    private static string GetRequiredTraceString(JsonElement payload, string propertyName) =>
+        payload.GetProperty(propertyName).GetString()
+        ?? throw new JsonException($"Execution trace property '{propertyName}' was null.");
+
+    private static string? GetOptionalTraceString(JsonElement payload, string propertyName) =>
+        payload.TryGetProperty(propertyName, out var value) && value.ValueKind != JsonValueKind.Null
+            ? value.GetString()
+            : null;
 
     private static void ValidateConfidence(double value, string parameterName)
     {

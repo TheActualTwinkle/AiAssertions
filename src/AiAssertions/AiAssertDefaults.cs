@@ -27,4 +27,6 @@ internal sealed record AiAssertDefaults
     internal double MinimumTrueConfidence { get; init; }
 
     internal double MinimumFalseConfidence { get; init; }
+
+    internal bool ExecutionTraceEnabled { get; init; }
 }
