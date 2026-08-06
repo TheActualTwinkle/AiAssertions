@@ -305,6 +305,34 @@ public sealed class CodebaseAssertionConfigurationTests
     }
 
     [Fact]
+    public async Task WithExecutionTrace_WhenVerdictJsonIsUnreadable_ShouldRecordParsingReasonForNotDetermined()
+    {
+        var response = new AiToolResponse
+        {
+            Content = "not json at all",
+            ToolCalls = []
+        };
+
+        var result = await CreateAssertion(new RecordingToolCallingClient(response))
+            .WithExecutionTrace()
+            .That("requirement");
+
+        result.Verdict.Should().Be(CodebaseAssertionVerdict.NotDetermined);
+        var modelVerdict = result.ExecutionTrace!.Entries
+            .OfType<CodebaseAssertionModelVerdictReceivedTraceEntry>()
+            .Should().ContainSingle().Subject;
+        modelVerdict.IsConclusive.Should().BeFalse();
+        modelVerdict.ParsingError.Should().Contain("Could not extract valid JSON");
+
+        var finalVerdict = result.ExecutionTrace.Entries
+            .OfType<CodebaseAssertionFinalVerdictTraceEntry>()
+            .Should().ContainSingle().Subject;
+        finalVerdict.Verdict.Should().Be(CodebaseAssertionVerdict.NotDetermined);
+        finalVerdict.Decision.Should().Be(CodebaseAssertionFinalVerdictDecision.ModelInconclusive);
+        finalVerdict.Comment.Should().Contain("Could not extract valid JSON");
+    }
+
+    [Fact]
     public async Task CodebaseAssertion_WhenGlobalExecutionTraceIsEnabled_ShouldCaptureTrace()
     {
         var client = new RecordingToolCallingClient(VerdictResponse());

@@ -4,6 +4,11 @@ namespace AiAssertions.Core.Tools.Codebase;
 
 internal static class PathSafety
 {
+    internal static string GetPortableRelativePath(string root, string path) =>
+        ToPortablePath(Path.GetRelativePath(root, path));
+
+    internal static string ToPortablePath(string path) => path.Replace('\\', '/');
+
     internal static string ResolveRoot(ToolExecutionContext context, string? requestedRoot)
     {
         var allowedRoot = DiscoverRoot(context.WorkingDirectory);

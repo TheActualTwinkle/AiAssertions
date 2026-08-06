@@ -223,7 +223,8 @@ internal sealed class CodebaseAssertionEngine
                         result.Passed,
                         result.Confidence,
                         result.IsConclusive,
-                        result.Reason
+                        result.Reason,
+                        result.ParsingError
                     });
 
                 return result;
@@ -321,7 +322,7 @@ internal sealed class CodebaseAssertionEngine
             if (text.Length > 30_000)
                 text = text[..30_000];
 
-            builder.AppendLine($"File: {Path.GetRelativePath(root, file)}");
+            builder.AppendLine($"File: {PathSafety.GetPortableRelativePath(root, file)}");
             builder.AppendLine($"```{GetMarkdownLanguage(file)}");
             builder.AppendLine(text);
             builder.AppendLine("```");

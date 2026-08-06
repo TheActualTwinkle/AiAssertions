@@ -24,4 +24,9 @@ public sealed record CodebaseAssertionModelVerdictReceivedTraceEntry : CodebaseA
     /// Gets the reason reported by the model.
     /// </summary>
     public required string Reason { get; init; }
+
+    /// <summary>
+    /// Gets the JSON parsing error when the verdict required best-effort recovery.
+    /// </summary>
+    public string? ParsingError { get; init; }
 }

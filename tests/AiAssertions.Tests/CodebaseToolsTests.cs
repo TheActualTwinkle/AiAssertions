@@ -112,8 +112,34 @@ public sealed class CodebaseToolsTests
         var regexMatches = regex.RootElement.GetProperty("matches");
 
         literalMatches.GetArrayLength().Should().Be(1);
-        literalMatches[0].GetProperty("file").GetString().Should().Be(Path.Combine("docs", "literal.txt"));
+        literalMatches[0].GetProperty("file").GetString().Should().Be("docs/literal.txt");
         regexMatches.GetArrayLength().Should().Be(2);
+    }
+
+    [Fact]
+    public async Task FileTools_ShouldReturnPortablePaths()
+    {
+        using var directory = new CodebaseToolsTestTemporaryDirectory();
+        Directory.CreateDirectory(directory.File("nested"));
+        await File.WriteAllTextAsync(directory.File("nested/file.txt"), "needle");
+        var context = new ToolExecutionContext(directory.Path, directory.Path);
+
+        var filesJson = await new SearchFilesTool().ExecuteAsync("{}", context);
+        var namesJson = await new FindFilesByNameTool().ExecuteAsync(
+            """{"name":"file"}""",
+            context);
+        var textJson = await new SearchTextTool().ExecuteAsync(
+            """{"query":"needle"}""",
+            context);
+        var readJson = await new ReadFileTool().ExecuteAsync(
+            """{"path":"nested/file.txt"}""",
+            context);
+
+        PathSafety.ToPortablePath(@"nested\file.txt").Should().Be("nested/file.txt");
+        filesJson.Should().Contain("nested/file.txt").And.NotContain("nested\\\\file.txt");
+        namesJson.Should().Contain("nested/file.txt").And.NotContain("nested\\\\file.txt");
+        textJson.Should().Contain("nested/file.txt").And.NotContain("nested\\\\file.txt");
+        readJson.Should().Contain("nested/file.txt").And.NotContain("nested\\\\file.txt");
     }
 
     [Fact]

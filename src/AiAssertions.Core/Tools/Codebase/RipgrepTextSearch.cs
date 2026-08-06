@@ -126,7 +126,7 @@ internal static class RipgrepTextSearch
             var snippet = TextSearchSnippet.Create(text, Math.Max(matchIndex, 0), query.Length);
 
             match = new TextSearchMatch(
-                Path.GetRelativePath(root, fullPath),
+                PathSafety.GetPortableRelativePath(root, fullPath),
                 lineNumber,
                 snippet.Text,
                 snippet.Truncated);

@@ -61,7 +61,7 @@ internal sealed class ReadFileTool : JsonTool<ReadFileToolArguments>
 
         return new
         {
-            file = arguments.Path,
+            file = PathSafety.GetPortableRelativePath(root, file),
             start_line = start,
             end_line = end,
             line_count = returnedLines,

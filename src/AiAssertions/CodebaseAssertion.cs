@@ -591,7 +591,8 @@ public sealed class CodebaseAssertion
             Passed = payload.GetProperty("passed").GetBoolean(),
             Confidence = payload.GetProperty("confidence").GetDouble(),
             IsConclusive = payload.GetProperty("isConclusive").GetBoolean(),
-            Reason = GetRequiredTraceString(payload, "reason")
+            Reason = GetRequiredTraceString(payload, "reason"),
+            ParsingError = GetOptionalTraceString(payload, "parsingError")
         };
 
     private static T DeserializeRequiredTraceProperty<T>(JsonElement payload, string propertyName)

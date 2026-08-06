@@ -16,7 +16,7 @@ internal sealed class ListProjectsTool : JsonTool<ListProjectsToolArguments>
         var indexedFiles = await context.FileIndex.GetFilesAsync(root, cancellationToken).ConfigureAwait(false);
         var projects = indexedFiles
             .Where(IsProjectManifest)
-            .Select(path => Path.GetRelativePath(root, path))
+            .Select(path => PathSafety.GetPortableRelativePath(root, path))
             .ToArray();
 
         return new { projects };

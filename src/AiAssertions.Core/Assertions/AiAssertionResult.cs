@@ -24,4 +24,7 @@ internal sealed record AiAssertionResult
 
     [JsonIgnore]
     internal AiAssertionExecutionTrace? ExecutionTrace { get; init; }
+
+    [JsonIgnore]
+    internal string? ParsingError { get; init; }
 }

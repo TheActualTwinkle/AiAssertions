@@ -10,7 +10,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <Authors>TheActualTwinkle</Authors>
     <Product>AiAssertions</Product>
-    <Version>0.2.1-rc.4</Version>
+    <Version>0.2.1-rc.5</Version>
     <PackageIcon>logo.png</PackageIcon>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/TheActualTwinkle/AiAssertions</PackageProjectUrl>

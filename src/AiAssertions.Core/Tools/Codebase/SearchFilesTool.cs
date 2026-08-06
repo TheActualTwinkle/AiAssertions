@@ -21,7 +21,7 @@ internal sealed class SearchFilesTool : JsonTool<SearchFilesToolArguments>
         var indexedFiles = await context.FileIndex.GetFilesAsync(root, cancellationToken, arguments.IncludeIgnored).ConfigureAwait(false);
         var page = indexedFiles
             .Where(path => PathExtensionMatcher.Matches(path, arguments.Extension))
-            .Select(path => Path.GetRelativePath(root, path))
+            .Select(path => PathSafety.GetPortableRelativePath(root, path))
             .Where(path => PathGlobMatcher.Matches(path, arguments.Glob))
             .Skip(offset)
             .Take(max + 1)

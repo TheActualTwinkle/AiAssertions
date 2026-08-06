@@ -31,7 +31,7 @@ internal sealed class SearchTextTool : JsonTool<SearchTextToolArguments>
             .GetFilesAsync(root, cancellationToken, arguments.IncludeIgnored)
             .ConfigureAwait(false);
         var indexedRelativePaths = indexedFiles
-            .Select(file => Path.GetRelativePath(root, file))
+            .Select(file => PathSafety.GetPortableRelativePath(root, file))
             .ToHashSet(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         var ripgrepMatches = arguments.UseRegex
             ? null
@@ -58,7 +58,7 @@ internal sealed class SearchTextTool : JsonTool<SearchTextToolArguments>
             if (matches.Count >= requestedMatches)
                 break;
 
-            var relativePath = Path.GetRelativePath(root, file);
+            var relativePath = PathSafety.GetPortableRelativePath(root, file);
             if (!IsInsideScope(file, scopedPath)
                 || !PathGlobMatcher.Matches(relativePath, arguments.Glob)
                 || !PathExtensionMatcher.Matches(file, arguments.Extension))

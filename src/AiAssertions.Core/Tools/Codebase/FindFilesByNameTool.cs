@@ -24,7 +24,7 @@ internal sealed class FindFilesByNameTool : JsonTool<FindFilesByNameToolArgument
         var indexedFiles = await context.FileIndex.GetFilesAsync(root, cancellationToken, arguments.IncludeIgnored).ConfigureAwait(false);
         var page = indexedFiles
             .Where(path => Path.GetFileName(path).Contains(arguments.Name, StringComparison.OrdinalIgnoreCase))
-            .Select(path => Path.GetRelativePath(root, path))
+            .Select(path => PathSafety.GetPortableRelativePath(root, path))
             .Skip(offset)
             .Take(max + 1)
             .ToArray();

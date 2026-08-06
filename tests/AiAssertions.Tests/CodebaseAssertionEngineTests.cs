@@ -34,6 +34,156 @@ public sealed class CodebaseAssertionEngineTests
     }
 
     [Fact]
+    public async Task EvaluateAsync_WhenModelReturnsWindowsEvidencePath_ShouldNormalizeIt()
+    {
+        using var directory = new EngineTestTemporaryDirectory();
+        var client = new RecordingClient(new AiToolResponse
+        {
+            Content = """{"passed":true,"confidence":1,"is_conclusive":true,"reason":"ok","evidence":[{"file":"Source\\Core\\Service.cs","start_line":1,"end_line":2,"description":"code"}],"missing_evidence":[]}""",
+            ToolCalls = []
+        });
+        var engine = new CodebaseAssertionEngine(
+            client,
+            options: new CodebaseAssertionOptions { WorkingDirectory = directory.Path });
+
+        var result = await engine.EvaluateAsync("requirement");
+
+        result.Evidence.Should().ContainSingle().Which.File.Should().Be("Source/Core/Service.cs");
+    }
+
+    [Fact]
+    public async Task EvaluateAsync_WhenModelReturnsUnescapedWindowsEvidencePath_ShouldRepairAndNormalizeIt()
+    {
+        using var directory = new EngineTestTemporaryDirectory();
+        var client = new RecordingClient(new AiToolResponse
+        {
+            Content = """{"passed":true,"confidence":1,"is_conclusive":true,"reason":"ok","evidence":[{"file":"Source\Core\Service.cs","start_line":1,"end_line":2,"description":"code"}],"missing_evidence":[]}""",
+            ToolCalls = []
+        });
+        var engine = new CodebaseAssertionEngine(
+            client,
+            options: new CodebaseAssertionOptions { WorkingDirectory = directory.Path });
+
+        var result = await engine.EvaluateAsync("requirement");
+
+        result.Evidence.Should().ContainSingle().Which.File.Should().Be("Source/Core/Service.cs");
+    }
+
+    [Fact]
+    public async Task EvaluateAsync_WhenUnescapedWindowsPathContainsValidJsonEscapes_ShouldRestorePathCharacters()
+    {
+        using var directory = new EngineTestTemporaryDirectory();
+        var client = new RecordingClient(new AiToolResponse
+        {
+            Content = """{"passed":true,"confidence":1,"is_conclusive":true,"reason":"ok","evidence":[{"file":"Source\Core\new\test.cs","start_line":1,"end_line":2,"description":"code"}],"missing_evidence":[]}""",
+            ToolCalls = []
+        });
+        var engine = new CodebaseAssertionEngine(
+            client,
+            options: new CodebaseAssertionOptions { WorkingDirectory = directory.Path });
+
+        var result = await engine.EvaluateAsync("requirement");
+
+        result.Evidence.Should().ContainSingle().Which.File.Should().Be("Source/Core/new/test.cs");
+    }
+
+    [Fact]
+    public async Task EvaluateAsync_WhenVerdictJsonCannotBeParsed_ShouldRecoverAvailableFields()
+    {
+        using var directory = new EngineTestTemporaryDirectory();
+        var client = new RecordingClient(new AiToolResponse
+        {
+            Content = """{"passed":true,"confidence":0.91,"is_conclusive":true,"reason":"ok","evidence":[{"file":"Source\\Core\\Service.cs","start_line":3,"end_line":5,"description":"code"}],"missing_evidence":[] BROKEN""",
+            ToolCalls = []
+        });
+        var engine = new CodebaseAssertionEngine(
+            client,
+            options: new CodebaseAssertionOptions { WorkingDirectory = directory.Path });
+
+        var result = await engine.EvaluateAsync("requirement");
+
+        result.Passed.Should().BeTrue();
+        result.Confidence.Should().Be(0.91);
+        result.IsConclusive.Should().BeTrue();
+        result.Reason.Should().Be("ok");
+        result.Evidence.Should().ContainSingle().Which.File.Should().Be("Source/Core/Service.cs");
+        result.MissingEvidence.Should().ContainSingle()
+            .Which.Description.Should().Contain("parsed best-effort");
+    }
+
+    [Fact]
+    public async Task EvaluateAsync_WhenValidVerdictIsWrappedInCommentary_ShouldExtractOuterJsonObject()
+    {
+        using var directory = new EngineTestTemporaryDirectory();
+        var client = new RecordingClient(new AiToolResponse
+        {
+            Content = """
+                      Verdict follows:
+                      {"passed":true,"confidence":1,"is_conclusive":true,"reason":"ok","evidence":[{"file":"Source/File.cs","start_line":1,"end_line":2,"description":"code"}],"missing_evidence":[]}
+                      End of verdict.
+                      """,
+            ToolCalls = []
+        });
+        var engine = new CodebaseAssertionEngine(
+            client,
+            options: new CodebaseAssertionOptions { WorkingDirectory = directory.Path });
+
+        var result = await engine.EvaluateAsync("requirement");
+
+        result.Passed.Should().BeTrue();
+        result.Evidence.Should().ContainSingle();
+        result.MissingEvidence.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task EvaluateAsync_WhenCommentPrecedesJsonCodeBlock_ShouldParseFencedVerdict()
+    {
+        using var directory = new EngineTestTemporaryDirectory();
+        var client = new RecordingClient(new AiToolResponse
+        {
+            Content = """
+                      The requirement is satisfied.
+                      ```json
+                      {"passed":true,"confidence":0.95,"is_conclusive":true,"reason":"ok","evidence":[{"file":"Source\Core\Service.cs","start_line":1,"end_line":2,"description":"code"}],"missing_evidence":[]}
+                      ```
+                      """,
+            ToolCalls = []
+        });
+        var engine = new CodebaseAssertionEngine(
+            client,
+            options: new CodebaseAssertionOptions { WorkingDirectory = directory.Path });
+
+        var result = await engine.EvaluateAsync("requirement");
+
+        result.Passed.Should().BeTrue();
+        result.Confidence.Should().Be(0.95);
+        result.IsConclusive.Should().BeTrue();
+        result.Evidence.Should().ContainSingle().Which.File.Should().Be("Source/Core/Service.cs");
+        result.MissingEvidence.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task EvaluateAsync_WhenVerdictContainsNoRecoverableJson_ShouldReturnNonConclusiveDiagnostic()
+    {
+        using var directory = new EngineTestTemporaryDirectory();
+        var client = new RecordingClient(new AiToolResponse
+        {
+            Content = "not json at all",
+            ToolCalls = []
+        });
+        var engine = new CodebaseAssertionEngine(
+            client,
+            options: new CodebaseAssertionOptions { WorkingDirectory = directory.Path });
+
+        var result = await engine.EvaluateAsync("requirement");
+
+        result.Passed.Should().BeFalse();
+        result.IsConclusive.Should().BeFalse();
+        result.MissingEvidence.Should().ContainSingle()
+            .Which.Description.Should().Contain("parsed best-effort");
+    }
+
+    [Fact]
     public async Task EvaluateAsync_WhenToolFails_ShouldRetryInsteadOfCachingError()
     {
         using var directory = new EngineTestTemporaryDirectory();
